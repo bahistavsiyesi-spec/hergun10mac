@@ -15,61 +15,76 @@ const FOOTBALL_DATA_API_KEY = process.env.FOOTBALL_DATA_API_KEY || "";
 
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
-const MAJOR_COMPETITION_CODES = new Set([
-  "PL",   // Premier League
-  "PD",   // La Liga
-  "SA",   // Serie A
-  "BL1",  // Bundesliga
-  "FL1",  // Ligue 1
-  "PPL",  // Primeira Liga
-  "DED",  // Eredivisie
-  "CL",   // Champions League
-  "EL",   // Europa League
-  "ECL",  // Conference League
-  "BSA"   // Brasileirao
-]);
+const MAJOR_LEAGUE_KEYWORDS = [
+  "premier league",
+  "laliga",
+  "la liga",
+  "serie a",
+  "bundesliga",
+  "ligue 1",
+  "champions league",
+  "europa league",
+  "conference league",
+  "eredivisie",
+  "primeira liga",
+  "super lig",
+  "süper lig"
+];
 
-function trTodayParts() {
+const CACHE = {
+  fixture: {
+    key: "",
+    expiresAt: 0,
+    data: []
+  }
+};
+
+function nowTs() {
+  return Date.now();
+}
+
+function getTRDateParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Istanbul",
     year: "numeric",
     month: "2-digit",
     day: "2-digit"
-  }).formatToParts(new Date());
+  }).formatToParts(date);
 
   const map = {};
   for (const p of parts) {
     if (p.type !== "literal") map[p.type] = p.value;
   }
+
   return {
     year: map.year,
     month: map.month,
     day: map.day,
-    date: `${map.year}-${map.month}-${map.day}`
+    ymd: `${map.year}-${map.month}-${map.day}`
   };
 }
 
-function toTRTime(utcDate) {
+function toTRTime(dateStr) {
   try {
     return new Intl.DateTimeFormat("tr-TR", {
       timeZone: "Europe/Istanbul",
       hour: "2-digit",
       minute: "2-digit",
       hour12: false
-    }).format(new Date(utcDate));
+    }).format(new Date(dateStr));
   } catch {
     return "—";
   }
 }
 
-function toTRDate(utcDate) {
+function toTRYmd(dateStr) {
   try {
     const parts = new Intl.DateTimeFormat("en-CA", {
       timeZone: "Europe/Istanbul",
       year: "numeric",
       month: "2-digit",
       day: "2-digit"
-    }).formatToParts(new Date(utcDate));
+    }).formatToParts(new Date(dateStr));
 
     const map = {};
     for (const p of parts) {
@@ -81,48 +96,115 @@ function toTRDate(utcDate) {
   }
 }
 
-function safeText(v) {
-  return String(v ?? "").trim();
+function cleanText(v) {
+  return String(v ?? "").replace(/\s+/g, " ").trim();
 }
 
-function normalizeMatch(m) {
-  const home = safeText(m?.homeTeam?.name);
-  const away = safeText(m?.awayTeam?.name);
-  const league = safeText(m?.competition?.name);
-  const code = safeText(m?.competition?.code);
-  const utcDate = safeText(m?.utcDate);
-  const status = safeText(m?.status);
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function rand(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+async function fetchJson(url, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        "user-agent": "Mozilla/5.0",
+        "accept": "application/json, text/plain, */*",
+        ...(options.headers || {})
+      }
+    });
+
+    const text = await res.text();
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${text.slice(0, 220)}`);
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`Gecerli JSON donmedi: ${text.slice(0, 220)}`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function normalizeSofascoreEvent(ev) {
+  const id = ev?.id;
+  const home = cleanText(ev?.homeTeam?.name);
+  const away = cleanText(ev?.awayTeam?.name);
+
+  const league =
+    cleanText(ev?.tournament?.uniqueTournament?.name) ||
+    cleanText(ev?.tournament?.name) ||
+    cleanText(ev?.uniqueTournament?.name);
+
+  const country =
+    cleanText(ev?.tournament?.category?.name) ||
+    cleanText(ev?.category?.name);
+
+  const startTs = ev?.startTimestamp ? Number(ev.startTimestamp) * 1000 : null;
+  const startIso = startTs ? new Date(startTs).toISOString() : "";
+  const status =
+    cleanText(ev?.status?.type) ||
+    cleanText(ev?.status?.description) ||
+    "scheduled";
+
+  if (!id || !home || !away || !league || !startIso) return null;
+  if (home.toLowerCase() === away.toLowerCase()) return null;
+
+  return {
+    id: `ss_${id}`,
+    provider: "sofascore",
+    match: `${home} vs ${away}`,
+    homeTeam: home,
+    awayTeam: away,
+    league,
+    country,
+    utcDate: startIso,
+    trDate: toTRYmd(startIso),
+    time: toTRTime(startIso),
+    status,
+    stage: cleanText(ev?.roundInfo?.round) ? `Round ${cleanText(ev?.roundInfo?.round)}` : "Normal"
+  };
+}
+
+function normalizeFootballDataMatch(m) {
   const id = m?.id;
+  const home = cleanText(m?.homeTeam?.name);
+  const away = cleanText(m?.awayTeam?.name);
+  const league = cleanText(m?.competition?.name);
+  const country = cleanText(m?.area?.name);
+  const utcDate = cleanText(m?.utcDate);
+  const status = cleanText(m?.status);
 
   if (!id || !home || !away || !league || !utcDate) return null;
   if (home.toLowerCase() === away.toLowerCase()) return null;
 
   return {
-    id,
+    id: `fd_${id}`,
+    provider: "football-data",
     match: `${home} vs ${away}`,
     homeTeam: home,
     awayTeam: away,
     league,
-    competitionCode: code,
+    country,
     utcDate,
-    trDate: toTRDate(utcDate),
+    trDate: toTRYmd(utcDate),
     time: toTRTime(utcDate),
     status,
-    venue: safeText(m?.venue),
-    stage: safeText(m?.stage),
-    area: safeText(m?.area?.name)
+    stage: cleanText(m?.stage) || "Normal"
   };
-}
-
-function isUsefulStatus(status) {
-  const allowed = new Set([
-    "SCHEDULED",
-    "TIMED",
-    "IN_PLAY",
-    "PAUSED",
-    "LIVE"
-  ]);
-  return allowed.has(status);
 }
 
 function dedupeMatches(matches) {
@@ -130,7 +212,13 @@ function dedupeMatches(matches) {
   const out = [];
 
   for (const m of matches) {
-    const key = `${m.homeTeam.toLowerCase()}__${m.awayTeam.toLowerCase()}__${m.trDate}`;
+    const key = [
+      m.homeTeam.toLowerCase(),
+      m.awayTeam.toLowerCase(),
+      m.trDate,
+      m.time
+    ].join("__");
+
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(m);
@@ -139,69 +227,128 @@ function dedupeMatches(matches) {
   return out;
 }
 
+function sortMatches(matches) {
+  return [...matches].sort((a, b) => {
+    const ta = new Date(a.utcDate).getTime();
+    const tb = new Date(b.utcDate).getTime();
+    return ta - tb;
+  });
+}
+
 function filterLeagueMode(matches, leagueMode, customLeagues) {
   if (leagueMode === "major") {
-    return matches.filter((m) => MAJOR_COMPETITION_CODES.has(m.competitionCode));
+    return matches.filter((m) => {
+      const text = `${m.league} ${m.country}`.toLowerCase();
+      return MAJOR_LEAGUE_KEYWORDS.some((k) => text.includes(k));
+    });
   }
 
   if (leagueMode === "custom" && Array.isArray(customLeagues) && customLeagues.length) {
     const wanted = customLeagues.map((x) => x.toLowerCase());
     return matches.filter((m) => {
-      const league = m.league.toLowerCase();
-      const area = m.area.toLowerCase();
-      const code = m.competitionCode.toLowerCase();
-      return wanted.some((w) => league.includes(w) || area.includes(w) || code.includes(w));
+      const text = `${m.league} ${m.country}`.toLowerCase();
+      return wanted.some((w) => text.includes(w));
     });
   }
 
   return matches;
 }
 
-function sortMatches(matches) {
-  return [...matches].sort((a, b) => {
-    const da = new Date(a.utcDate).getTime();
-    const db = new Date(b.utcDate).getTime();
-    return da - db;
-  });
+async function fetchTodayMatchesFromSofascore() {
+  const today = getTRDateParts().ymd;
+
+  const urls = [
+    `https://www.sofascore.com/api/v1/sport/football/scheduled-events/${today}`,
+    `https://www.sofascore.com/api/v1/sport/football/scheduled-events?date=${today}`
+  ];
+
+  let lastError = null;
+
+  for (const url of urls) {
+    try {
+      const data = await fetchJson(url);
+      const events = Array.isArray(data?.events) ? data.events : [];
+
+      const normalized = events
+        .map(normalizeSofascoreEvent)
+        .filter(Boolean)
+        .filter((m) => m.trDate === today);
+
+      if (normalized.length) {
+        return {
+          provider: "sofascore",
+          matches: dedupeMatches(sortMatches(normalized))
+        };
+      }
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw new Error(`Sofascore fikstur alinamadi${lastError ? `: ${lastError.message}` : ""}`);
 }
 
 async function fetchTodayMatchesFromFootballData() {
   if (!FOOTBALL_DATA_API_KEY) {
-    throw new Error("FOOTBALL_DATA_API_KEY tanimli degil.");
+    throw new Error("FOOTBALL_DATA_API_KEY tanimli degil");
   }
 
-  const today = trTodayParts().date;
+  const today = getTRDateParts().ymd;
   const url = `https://api.football-data.org/v4/matches?dateFrom=${today}&dateTo=${today}`;
 
-  const response = await fetch(url, {
+  const data = await fetchJson(url, {
     headers: {
       "X-Auth-Token": FOOTBALL_DATA_API_KEY
     }
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`football-data API hatasi (${response.status}): ${text.slice(0, 250)}`);
-  }
+  const matches = Array.isArray(data?.matches) ? data.matches : [];
 
-  const data = await response.json();
-  const rawMatches = Array.isArray(data?.matches) ? data.matches : [];
-
-  const normalized = rawMatches
-    .map(normalizeMatch)
+  const normalized = matches
+    .map(normalizeFootballDataMatch)
     .filter(Boolean)
-    .filter((m) => isUsefulStatus(m.status))
     .filter((m) => m.trDate === today);
 
-  return dedupeMatches(sortMatches(normalized));
+  return {
+    provider: "football-data",
+    matches: dedupeMatches(sortMatches(normalized))
+  };
 }
 
-function rand(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
+async function getTodayMatchesWithCache() {
+  const today = getTRDateParts().ymd;
+  const cacheKey = `today_${today}`;
 
-function clamp(n, min, max) {
-  return Math.max(min, Math.min(max, n));
+  if (CACHE.fixture.key === cacheKey && CACHE.fixture.expiresAt > nowTs()) {
+    return {
+      provider: "cache",
+      matches: CACHE.fixture.data
+    };
+  }
+
+  let result = null;
+
+  try {
+    result = await fetchTodayMatchesFromSofascore();
+  } catch (ssErr) {
+    console.error("Sofascore source fail:", ssErr.message);
+
+    try {
+      result = await fetchTodayMatchesFromFootballData();
+    } catch (fdErr) {
+      console.error("Football-data source fail:", fdErr.message);
+      result = {
+        provider: "none",
+        matches: []
+      };
+    }
+  }
+
+  CACHE.fixture.key = cacheKey;
+  CACHE.fixture.expiresAt = nowTs() + 5 * 60 * 1000;
+  CACHE.fixture.data = result.matches;
+
+  return result;
 }
 
 function confidenceFromScore(score) {
@@ -271,12 +418,12 @@ function buildLocalTip(realMatch, extraPrompt = "") {
   const homePerformance =
     homeStrength >= 78 ? "Cok guclu" :
     homeStrength >= 66 ? "Iyi" :
-    homeStrength >= 56 ? "Orta" : "Dalgalı";
+    homeStrength >= 56 ? "Orta" : "Dalgali";
 
   const awayPerformance =
     awayStrength >= 76 ? "Cok guclu" :
     awayStrength >= 64 ? "Iyi" :
-    awayStrength >= 54 ? "Orta" : "Dalgalı";
+    awayStrength >= 54 ? "Orta" : "Dalgali";
 
   const h2hSummary =
     resultPrediction === "1"
@@ -287,17 +434,17 @@ function buildLocalTip(realMatch, extraPrompt = "") {
 
   const tableContext =
     resultPrediction === "1"
-      ? "Ev sahibi taraf puan ihtiyaci ve saha avantajiyla bir adim onde."
+      ? "Ev sahibi taraf saha avantajiyla bir adim onde gorunuyor."
       : resultPrediction === "2"
-      ? "Deplasman ekibi gecis oyunu ve form ivmesiyle puan arayabilir."
+      ? "Deplasman ekibi gecis oyunu ile puan arayabilir."
       : "Mac kontrollu ve dengeye yakin bir senaryo cizebilir.";
 
   const reasons = [
-    `Mac bugun oynanacak resmi fikstur listesinden alindi.`,
+    `Mac bugunun gercek fikstur kaynagindan alindi.`,
     `Olasilik modeli 2.5 Ust icin %${probOver25}, KG Var icin %${probBtts} hesap verdi.`,
     extraPrompt
       ? `Ek not dikkate alindi: ${extraPrompt.slice(0, 110)}`
-      : "Risk notu mevcut denge, gol beklentisi ve temel form modeline gore olusturuldu."
+      : "Risk notu temel denge, gol beklentisi ve form modeline gore olusturuldu."
   ];
 
   return {
@@ -325,7 +472,7 @@ function buildLocalTip(realMatch, extraPrompt = "") {
     away_performance: awayPerformance,
     table_context: tableContext,
     reasons,
-    source_match: "football-data-today"
+    source_match: realMatch.provider
   };
 }
 
@@ -346,7 +493,7 @@ Kurallar:
 - Turkce yaz ama ascii kullan
 - Yeni alan ekleme
 - Asiri iddiali olma
-- Fikstur gercek; maca dokunma, takim ismi degistirme
+- Fikstur gercek; match, league, time, match_id ve source_match alanlarini degistirme
 - Ek istek: ${extraPrompt || "yok"}
 
 Veri:
@@ -380,8 +527,9 @@ ${JSON.stringify(tips, null, 2)}
         match_id: tips[i].match_id,
         league: tips[i].league,
         time: tips[i].time,
-        source_match: "football-data-today"
+        source_match: tips[i].source_match
       }));
+
       return { tips: safeTips, source: "openai" };
     }
 
@@ -463,7 +611,6 @@ app.get("/", (req, res) => {
   res.json({
     ok: true,
     message: "Bahis Asistani Pro backend aktif",
-    need_env: ["FOOTBALL_DATA_API_KEY"],
     endpoints: {
       health: "/health",
       today_matches: "/today-matches",
@@ -477,7 +624,8 @@ app.get("/health", (req, res) => {
     ok: true,
     status: "running",
     openai: !!openai,
-    footballDataConfigured: !!FOOTBALL_DATA_API_KEY
+    footballDataConfigured: !!FOOTBALL_DATA_API_KEY,
+    cacheActive: true
   });
 });
 
@@ -488,15 +636,17 @@ app.get("/today-matches", async (req, res) => {
       .split(",")
       .map((x) => x.trim())
       .filter(Boolean);
-    const match_limit = Math.max(1, Math.min(Number(req.query.match_limit) || 20, 100));
+    const match_limit = Math.max(1, Math.min(Number(req.query.match_limit) || 30, 100));
 
-    const allToday = await fetchTodayMatchesFromFootballData();
+    const fixtureResult = await getTodayMatchesWithCache();
+    const allToday = fixtureResult.matches;
     const filtered = filterLeagueMode(allToday, league_mode, custom_leagues);
     const finalMatches = filtered.slice(0, match_limit);
 
     res.json({
       ok: true,
-      date_tr: trTodayParts().date,
+      date_tr: getTRDateParts().ymd,
+      fixture_source: fixtureResult.provider,
       total_found: allToday.length,
       total_after_filter: filtered.length,
       returned: finalMatches.length,
@@ -520,7 +670,8 @@ app.post("/analyze", async (req, res) => {
       extra_prompt = ""
     } = req.body || {};
 
-    const allToday = await fetchTodayMatchesFromFootballData();
+    const fixtureResult = await getTodayMatchesWithCache();
+    const allToday = fixtureResult.matches;
     const filtered = filterLeagueMode(allToday, league_mode, custom_leagues);
 
     const safeLimit = Math.max(1, Math.min(Number(match_limit) || 10, 100));
@@ -530,6 +681,7 @@ app.post("/analyze", async (req, res) => {
       return res.json({
         ok: true,
         source: "no-matches",
+        fixture_source: fixtureResult.provider,
         total_matches: 0,
         tips: [],
         coupons: { safest: [], balanced: [], surprise: [] },
@@ -542,21 +694,21 @@ app.post("/analyze", async (req, res) => {
     }
 
     const localTips = selectedMatches.map((m) => buildLocalTip(m, extra_prompt));
-    const improved = await improveTipsWithOpenAI(localTips, extra_prompt);
+    const improved = await improveTipsWithOpenAI(localTips, extraPrompt);
     const finalTips = sortByStrength(improved.tips);
     const coupons = buildCoupons(finalTips);
 
     res.json({
       ok: true,
       source: improved.source,
+      fixture_source: fixtureResult.provider,
       total_matches: finalTips.length,
       tips: finalTips,
       coupons,
       meta: {
         total_found_today: allToday.length,
         total_after_filter: filtered.length,
-        returned: finalTips.length,
-        fixture_source: "football-data.org"
+        returned: finalTips.length
       }
     });
   } catch (error) {
