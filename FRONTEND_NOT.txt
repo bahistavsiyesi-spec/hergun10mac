@@ -1,0 +1,10 @@
+Ön yüzde backend alanına geçici değil gerçek adres yazılmalı.
+
+Örnek:
+https://senin-render-servisin.onrender.com/analyze
+
+`Failed to fetch` hatası genelde şunlardan gelir:
+1. endpoint yok
+2. backend deploy edilmedi
+3. yanlış URL yazıldı
+4. CORS veya sunucu hatası oluştu
