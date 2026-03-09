@@ -90,6 +90,7 @@ function toTRYmd(dateStr) {
     for (const p of parts) {
       if (p.type !== "literal") map[p.type] = p.value;
     }
+
     return `${map.year}-${map.month}-${map.day}`;
   } catch {
     return "";
@@ -266,13 +267,19 @@ async function fetchTodayMatchesFromSofascore() {
 
   for (const url of urls) {
     try {
+      console.log("Trying Sofascore URL:", url);
+
       const data = await fetchJson(url);
       const events = Array.isArray(data?.events) ? data.events : [];
+
+      console.log("Sofascore raw events:", events.length);
 
       const normalized = events
         .map(normalizeSofascoreEvent)
         .filter(Boolean)
         .filter((m) => m.trDate === today);
+
+      console.log("Sofascore normalized today matches:", normalized.length);
 
       if (normalized.length) {
         return {
@@ -282,6 +289,7 @@ async function fetchTodayMatchesFromSofascore() {
       }
     } catch (err) {
       lastError = err;
+      console.error("Sofascore request failed:", err.message);
     }
   }
 
@@ -296,6 +304,8 @@ async function fetchTodayMatchesFromFootballData() {
   const today = getTRDateParts().ymd;
   const url = `https://api.football-data.org/v4/matches?dateFrom=${today}&dateTo=${today}`;
 
+  console.log("Trying Football-data URL:", url);
+
   const data = await fetchJson(url, {
     headers: {
       "X-Auth-Token": FOOTBALL_DATA_API_KEY
@@ -304,10 +314,14 @@ async function fetchTodayMatchesFromFootballData() {
 
   const matches = Array.isArray(data?.matches) ? data.matches : [];
 
+  console.log("Football-data raw matches:", matches.length);
+
   const normalized = matches
     .map(normalizeFootballDataMatch)
     .filter(Boolean)
     .filter((m) => m.trDate === today);
+
+  console.log("Football-data normalized today matches:", normalized.length);
 
   return {
     provider: "football-data",
@@ -319,22 +333,33 @@ async function getTodayMatchesWithCache() {
   const today = getTRDateParts().ymd;
   const cacheKey = `today_${today}`;
 
-  if (CACHE.fixture.key === cacheKey && CACHE.fixture.expiresAt > nowTs()) {
+  if (
+    CACHE.fixture.key === cacheKey &&
+    CACHE.fixture.expiresAt > nowTs() &&
+    Array.isArray(CACHE.fixture.data) &&
+    CACHE.fixture.data.length > 0
+  ) {
+    console.log("Fixture cache hit:", CACHE.fixture.data.length);
+
     return {
       provider: "cache",
       matches: CACHE.fixture.data
     };
   }
 
+  console.log("Fixture cache miss or empty cache, fetching live sources...");
+
   let result = null;
 
   try {
     result = await fetchTodayMatchesFromSofascore();
+    console.log("Sofascore final match count:", result.matches.length);
   } catch (ssErr) {
     console.error("Sofascore source fail:", ssErr.message);
 
     try {
       result = await fetchTodayMatchesFromFootballData();
+      console.log("Football-data final match count:", result.matches.length);
     } catch (fdErr) {
       console.error("Football-data source fail:", fdErr.message);
       result = {
@@ -344,9 +369,19 @@ async function getTodayMatchesWithCache() {
     }
   }
 
-  CACHE.fixture.key = cacheKey;
-  CACHE.fixture.expiresAt = nowTs() + 5 * 60 * 1000;
-  CACHE.fixture.data = result.matches;
+  if (Array.isArray(result.matches) && result.matches.length > 0) {
+    CACHE.fixture.key = cacheKey;
+    CACHE.fixture.expiresAt = nowTs() + 5 * 60 * 1000;
+    CACHE.fixture.data = result.matches;
+
+    console.log("Fixture cache updated with matches:", result.matches.length);
+  } else {
+    CACHE.fixture.key = "";
+    CACHE.fixture.expiresAt = 0;
+    CACHE.fixture.data = [];
+
+    console.log("No matches found, empty result NOT cached.");
+  }
 
   return result;
 }
@@ -639,6 +674,11 @@ app.get("/today-matches", async (req, res) => {
     const match_limit = Math.max(1, Math.min(Number(req.query.match_limit) || 30, 100));
 
     const fixtureResult = await getTodayMatchesWithCache();
+    console.log("fixtureResult:", {
+      provider: fixtureResult.provider,
+      count: fixtureResult.matches.length
+    });
+
     const allToday = fixtureResult.matches;
     const filtered = filterLeagueMode(allToday, league_mode, custom_leagues);
     const finalMatches = filtered.slice(0, match_limit);
@@ -671,6 +711,11 @@ app.post("/analyze", async (req, res) => {
     } = req.body || {};
 
     const fixtureResult = await getTodayMatchesWithCache();
+    console.log("analyze fixtureResult:", {
+      provider: fixtureResult.provider,
+      count: fixtureResult.matches.length
+    });
+
     const allToday = fixtureResult.matches;
     const filtered = filterLeagueMode(allToday, league_mode, custom_leagues);
 
@@ -694,7 +739,7 @@ app.post("/analyze", async (req, res) => {
     }
 
     const localTips = selectedMatches.map((m) => buildLocalTip(m, extra_prompt));
-    const improved = await improveTipsWithOpenAI(localTips, extraPrompt);
+    const improved = await improveTipsWithOpenAI(localTips, extra_prompt);
     const finalTips = sortByStrength(improved.tips);
     const coupons = buildCoupons(finalTips);
 
