@@ -22,10 +22,6 @@ const RAPIDAPI_MATCHES_BY_DATE_PATH =
 
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
-/**
- * football-data planina gore bazi ligler farkli olabilir.
- * Erisimi olmayan lig hata verirse sessizce atlanir.
- */
 const DEFAULT_COMPETITION_CODES = [
   "PL",
   "PD",
@@ -63,11 +59,13 @@ const MAJOR_LEAGUE_KEYWORDS = [
 ];
 
 const CACHE_TTL = {
-  fixtureMs: 5 * 60 * 1000,
+  fixtureMs: 3 * 60 * 1000,
   standingsMs: 20 * 60 * 1000,
   teamMatchesMs: 20 * 60 * 1000,
   h2hMs: 30 * 60 * 1000
 };
+
+const MIN_CACHE_MATCHES = Number(process.env.MIN_CACHE_MATCHES || 8);
 
 const CACHE = {
   fixture: {
@@ -300,11 +298,6 @@ function getObjectValueByPaths(obj, paths = []) {
   return null;
 }
 
-/**
- * RapidAPI tarafinda bazen direkt mac listesi donmez.
- * Grup objeleri icinde events dizileri olur.
- * Bu fonksiyon hem direkt hem nested events yapisini acar.
- */
 function pickRapidApiItems(data) {
   const directCandidates = [
     data?.matches,
@@ -573,7 +566,7 @@ function normalizeRapidApiMatch(raw) {
 
   return {
     id: `ra_${rawId || `${normalizeTextForKey(home)}_${normalizeTextForKey(away)}_${utcDate}`}`,
-    rawMatchId: rawId || null,
+    rawMatchId: null,
     provider: "rapidapi",
     match: `${home} vs ${away}`,
     homeTeam: home,
@@ -709,6 +702,82 @@ function sortMatches(matches) {
   });
 }
 
+function isFootballDataLike(match) {
+  return String(match?.provider || "").includes("football-data");
+}
+
+function mergeTwoMatches(existing, incoming) {
+  const existingIsFD = isFootballDataLike(existing);
+  const incomingIsFD = isFootballDataLike(incoming);
+
+  const preferredBase =
+    incomingIsFD && !existingIsFD ? incoming : existing;
+
+  const secondary =
+    preferredBase === existing ? incoming : existing;
+
+  const merged = {
+    ...preferredBase,
+    ...secondary
+  };
+
+  merged.id = preferredBase.id || secondary.id;
+  merged.match = preferredBase.match || secondary.match;
+  merged.homeTeam = preferredBase.homeTeam || secondary.homeTeam;
+  merged.awayTeam = preferredBase.awayTeam || secondary.awayTeam;
+  merged.utcDate = preferredBase.utcDate || secondary.utcDate;
+  merged.trDate = preferredBase.trDate || secondary.trDate;
+  merged.time = preferredBase.time || secondary.time;
+  merged.status = preferredBase.status || secondary.status;
+  merged.stage = preferredBase.stage || secondary.stage || "Normal";
+  merged.country = preferredBase.country || secondary.country || "";
+  merged.league = preferredBase.league || secondary.league || "Unknown League";
+
+  merged.rawMatchId =
+    (incomingIsFD ? incoming.rawMatchId : null) ||
+    (existingIsFD ? existing.rawMatchId : null) ||
+    preferredBase.rawMatchId ||
+    secondary.rawMatchId ||
+    null;
+
+  merged.homeTeamId =
+    (incomingIsFD ? incoming.homeTeamId : null) ||
+    (existingIsFD ? existing.homeTeamId : null) ||
+    preferredBase.homeTeamId ||
+    secondary.homeTeamId ||
+    null;
+
+  merged.awayTeamId =
+    (incomingIsFD ? incoming.awayTeamId : null) ||
+    (existingIsFD ? existing.awayTeamId : null) ||
+    preferredBase.awayTeamId ||
+    secondary.awayTeamId ||
+    null;
+
+  merged.competitionCode =
+    (incomingIsFD ? incoming.competitionCode : "") ||
+    (existingIsFD ? existing.competitionCode : "") ||
+    preferredBase.competitionCode ||
+    secondary.competitionCode ||
+    slugifyCompetitionCode(merged.league, merged.country);
+
+  merged.competitionId =
+    (incomingIsFD ? incoming.competitionId : null) ||
+    (existingIsFD ? existing.competitionId : null) ||
+    preferredBase.competitionId ||
+    secondary.competitionId ||
+    null;
+
+  merged.provider =
+    merged.rawMatchId && merged.homeTeamId && merged.awayTeamId
+      ? "football-data+rapidapi"
+      : (incomingIsFD || existingIsFD)
+      ? "football-data-partial"
+      : preferredBase.provider || secondary.provider || "unknown";
+
+  return merged;
+}
+
 function mergeMatchSources(primary, secondary) {
   const map = new Map();
 
@@ -721,25 +790,7 @@ function mergeMatchSources(primary, secondary) {
     }
 
     const existing = map.get(key);
-
-    const merged = {
-      ...existing,
-      ...m,
-      id: existing.id,
-      rawMatchId: existing.rawMatchId || m.rawMatchId || null,
-      provider:
-        existing.provider === "rapidapi" || m.provider !== "rapidapi"
-          ? existing.provider
-          : m.provider,
-      homeTeamId: existing.homeTeamId || m.homeTeamId || null,
-      awayTeamId: existing.awayTeamId || m.awayTeamId || null,
-      competitionCode: existing.competitionCode || m.competitionCode || "",
-      competitionId: existing.competitionId || m.competitionId || null,
-      country: existing.country || m.country || "",
-      stage: existing.stage || m.stage || "Normal"
-    };
-
-    map.set(key, merged);
+    map.set(key, mergeTwoMatches(existing, m));
   }
 
   return sortMatches([...map.values()]);
@@ -813,14 +864,20 @@ async function fetchMatchesForDateRangeFromFootballDataCompetitions(dateFrom, da
   };
 }
 
-async function getMatchesWithCache(dateFrom, dateTo) {
+async function getMatchesWithCache(
+  dateFrom,
+  dateTo,
+  options = {}
+) {
+  const { forceRefresh = false, minNeeded = MIN_CACHE_MATCHES } = options;
   const cacheKey = `range_${dateFrom}_${dateTo}`;
 
   if (
+    !forceRefresh &&
     CACHE.fixture.key === cacheKey &&
     CACHE.fixture.expiresAt > nowTs() &&
     Array.isArray(CACHE.fixture.data) &&
-    CACHE.fixture.data.length > 0
+    CACHE.fixture.data.length >= minNeeded
   ) {
     console.log("Fixture cache hit:", CACHE.fixture.data.length);
     return {
@@ -829,7 +886,23 @@ async function getMatchesWithCache(dateFrom, dateTo) {
     };
   }
 
-  console.log("Fixture cache miss, fetching RapidAPI + football-data...");
+  if (
+    !forceRefresh &&
+    CACHE.fixture.key === cacheKey &&
+    CACHE.fixture.expiresAt > nowTs() &&
+    Array.isArray(CACHE.fixture.data) &&
+    CACHE.fixture.data.length > 0 &&
+    CACHE.fixture.data.length < minNeeded
+  ) {
+    console.log(
+      "Fixture cache bypassed due to low count:",
+      CACHE.fixture.data.length,
+      "minNeeded:",
+      minNeeded
+    );
+  } else {
+    console.log("Fixture cache miss, fetching RapidAPI + football-data...");
+  }
 
   let rapidResult = { provider: "rapidapi-failed", matches: [] };
   let footballResult = { provider: "football-data-failed", matches: [] };
@@ -1176,10 +1249,20 @@ async function enrichMatch(match) {
 
   const dateTo = getTRDateParts(new Date(new Date(match.utcDate).getTime() - 60 * 1000)).ymd;
 
+  const canUseFootballDataEnrichment =
+    !!match.rawMatchId &&
+    !!match.homeTeamId &&
+    !!match.awayTeamId &&
+    !!match.competitionCode;
+
   const [homeRecent, awayRecent, h2hData] = await Promise.all([
-    fetchTeamRecentMatches(match.homeTeamId, dateTo, 10),
-    fetchTeamRecentMatches(match.awayTeamId, dateTo, 10),
-    match.provider === "football-data" && match.rawMatchId
+    canUseFootballDataEnrichment
+      ? fetchTeamRecentMatches(match.homeTeamId, dateTo, 10)
+      : Promise.resolve([]),
+    canUseFootballDataEnrichment
+      ? fetchTeamRecentMatches(match.awayTeamId, dateTo, 10)
+      : Promise.resolve([]),
+    canUseFootballDataEnrichment
       ? fetchMatchH2H(match.rawMatchId)
       : Promise.resolve(null)
   ]);
@@ -1205,7 +1288,8 @@ async function enrichMatch(match) {
         standingForm: awayStandingForm,
         recent: awayRecentStats
       },
-      h2h
+      h2h,
+      enrichmentLevel: canUseFootballDataEnrichment ? "full" : "limited"
     }
   };
 }
@@ -1221,7 +1305,7 @@ function buildStrengthScore(side, opponent) {
   let score = 50;
 
   score += (Number(recent.formScore || 0) - 50) * 0.35;
-  score += ((Number(recent.goalsForAvg || 0) - Number(recent.goalsAgainstAvg || 0)) * 8);
+  score += (Number(recent.goalsForAvg || 0) - Number(recent.goalsAgainstAvg || 0)) * 8;
   score += (Number(recent.over25Rate || 0) - 50) * 0.06;
   score += (Number(recent.bttsRate || 0) - 50) * 0.03;
   score += (Number(standingForm.formScore5 || 0) - 50) * 0.15;
@@ -1255,10 +1339,22 @@ function riskFromBalance(balanceDiff, volatility) {
   return "Yuksek risk";
 }
 
+function buildReasonLineForData(match, home, away, enrichmentLevel) {
+  const homeForm = home?.recent?.form10 || home?.standingForm?.form10 || "sinirli veri";
+  const awayForm = away?.recent?.form10 || away?.standingForm?.form10 || "sinirli veri";
+
+  if (enrichmentLevel === "full") {
+    return `Form verisi: ${match.homeTeam} son maclarda ${homeForm}, ${match.awayTeam} ise ${awayForm}.`;
+  }
+
+  return `Veri kapsami sinirli: ${match.homeTeam} ve ${match.awayTeam} icin temel fikstur profili uzerinden analiz yapildi.`;
+}
+
 function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
   const home = match?.enriched?.home || {};
   const away = match?.enriched?.away || {};
   const h2h = match?.enriched?.h2h || {};
+  const enrichmentLevel = match?.enriched?.enrichmentLevel || "limited";
 
   const homeStrength = buildStrengthScore(home, away);
   const awayStrength = buildStrengthScore(away, home);
@@ -1270,10 +1366,10 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
   else if (gap <= -8) resultPrediction = "2";
 
   const combinedGoalBase =
-    ((Number(home?.recent?.goalsForAvg || 0) + Number(away?.recent?.goalsForAvg || 0)) * 17) +
-    ((Number(home?.recent?.goalsAgainstAvg || 0) + Number(away?.recent?.goalsAgainstAvg || 0)) * 8);
+    (Number(home?.recent?.goalsForAvg || 0) + Number(away?.recent?.goalsForAvg || 0)) * 17 +
+    (Number(home?.recent?.goalsAgainstAvg || 0) + Number(away?.recent?.goalsAgainstAvg || 0)) * 8;
 
-  const over25Lean = clamp(
+  let over25Lean = clamp(
     Math.round(
       combinedGoalBase * 0.9 +
       Number(home?.recent?.over25Rate || 0) * 0.30 +
@@ -1285,7 +1381,7 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
     92
   );
 
-  const bttsLean = clamp(
+  let bttsLean = clamp(
     Math.round(
       Number(home?.recent?.bttsRate || 0) * 0.40 +
       Number(away?.recent?.bttsRate || 0) * 0.40 +
@@ -1295,7 +1391,7 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
     90
   );
 
-  const firstHalf2PlusLean = clamp(
+  let firstHalf2PlusLean = clamp(
     Math.round(
       Number(home?.recent?.firstHalf2PlusRate || 0) * 0.42 +
       Number(away?.recent?.firstHalf2PlusRate || 0) * 0.42 +
@@ -1304,6 +1400,12 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
     5,
     78
   );
+
+  if (enrichmentLevel !== "full") {
+    over25Lean = clamp(Math.round((over25Lean * 0.55) + 20), 12, 68);
+    bttsLean = clamp(Math.round((bttsLean * 0.55) + 18), 10, 65);
+    firstHalf2PlusLean = clamp(Math.round((firstHalf2PlusLean * 0.50) + 10), 5, 45);
+  }
 
   const homeLean = clamp(
     Math.round(
@@ -1327,7 +1429,8 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
     Math.abs(Number(home?.recent?.goalsForAvg || 0) - Number(home?.recent?.goalsAgainstAvg || 0)) * 4 +
     Math.abs(Number(away?.recent?.goalsForAvg || 0) - Number(away?.recent?.goalsAgainstAvg || 0)) * 4 +
     Math.abs(50 - bttsLean) * 0.12 +
-    Math.abs(50 - over25Lean) * 0.10;
+    Math.abs(50 - over25Lean) * 0.10 +
+    (enrichmentLevel === "full" ? 0 : 10);
 
   const dominantLean = Math.max(homeLean, awayLean, over25Lean, bttsLean);
   const riskNote = riskFromBalance(balanceDiff, volatility);
@@ -1360,16 +1463,23 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
     } else {
       tableContext = "Iki takim lig tablosunda birbirine yakin.";
     }
+  } else if (enrichmentLevel !== "full") {
+    tableContext = `${match.league} maci icin tablo verisi sinirli, temel guc dengesi kullanildi.`;
   }
 
-  const h2hSummary = h2h?.summary || "Yeterli H2H verisi yok.";
+  const h2hSummary =
+    enrichmentLevel === "full"
+      ? h2h?.summary || "Yeterli H2H verisi yok."
+      : `${match.homeTeam} - ${match.awayTeam} icin detayli H2H verisi sinirli.`;
 
   const reasons = [
-    `Form verisi: ${match.homeTeam} son maclarda ${home?.recent?.form10 || home?.standingForm?.form10 || "yetersiz"}, ${match.awayTeam} ise ${away?.recent?.form10 || away?.standingForm?.form10 || "yetersiz"}.`,
+    buildReasonLineForData(match, home, away, enrichmentLevel),
     `Gol egilimi: 2.5 Ust %${over25Lean}, KG Var %${bttsLean}, Ilk yari 2+ gol %${firstHalf2PlusLean}.`,
     extraPrompt
       ? `Ek not dikkate alindi: ${cleanText(extraPrompt).slice(0, 110)}`
-      : `H2H ozeti: ${h2hSummary}`
+      : enrichmentLevel === "full"
+      ? `H2H ozeti: ${h2hSummary}`
+      : `Mac profili: ${match.league} / ${match.country || "Bilinmeyen ulke"} verisiyle dusuk-guven analizi.`
   ];
 
   return {
@@ -1408,6 +1518,7 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
     reasons,
     source_match: match.provider,
     real_data: {
+      enrichmentLevel,
       home: {
         teamId: match.homeTeamId,
         position: home?.standing?.position ?? null,
@@ -1456,6 +1567,7 @@ Kurallar:
 - Asiri iddiali olma
 - Gercek sayisal verileri bozma
 - match, match_id, raw_match_id, league, time, source_match, real_data alanlarini degistirme
+- Her macin metni farkli olsun, ayni sablonu tekrar etme
 - Ek istek: ${extraPrompt || "yok"}
 
 Veri:
@@ -1595,6 +1707,7 @@ app.get("/health", (req, res) => {
     rapidApiHost: RAPIDAPI_HOST || null,
     rapidApiCustomPath: RAPIDAPI_MATCHES_BY_DATE_PATH || null,
     cacheActive: true,
+    minCacheMatches: MIN_CACHE_MATCHES,
     competitions: DEFAULT_COMPETITION_CODES,
     cacheInfo: {
       fixtureTtlMinutes: CACHE_TTL.fixtureMs / 60000,
@@ -1615,11 +1728,15 @@ app.get("/today-matches", async (req, res) => {
 
     const match_limit = Math.max(1, Math.min(Number(req.query.match_limit) || 40, 150));
     const day_offset = clamp(Number(req.query.day_offset) || 0, 0, 2);
+    const force_refresh = String(req.query.force_refresh || "0") === "1";
 
     const dateFrom = getDateShiftedYmd(day_offset);
     const dateTo = dateFrom;
 
-    const fixtureResult = await getMatchesWithCache(dateFrom, dateTo);
+    const fixtureResult = await getMatchesWithCache(dateFrom, dateTo, {
+      forceRefresh: force_refresh,
+      minNeeded: Math.max(MIN_CACHE_MATCHES, Math.min(match_limit, 20))
+    });
 
     const allToday = fixtureResult.matches;
     const filtered = filterLeagueMode(allToday, league_mode, custom_leagues);
@@ -1653,7 +1770,11 @@ app.get("/match-details/:id", async (req, res) => {
       });
     }
 
-    const allMatchesResult = await getMatchesWithCache(getDateShiftedYmd(0), getDateShiftedYmd(0));
+    const allMatchesResult = await getMatchesWithCache(getDateShiftedYmd(0), getDateShiftedYmd(0), {
+      forceRefresh: String(req.query.force_refresh || "0") === "1",
+      minNeeded: MIN_CACHE_MATCHES
+    });
+
     const found =
       allMatchesResult.matches.find((m) => m.id === matchId || String(m.rawMatchId) === matchId) ||
       null;
@@ -1687,19 +1808,23 @@ app.post("/analyze", async (req, res) => {
       league_mode = "all",
       custom_leagues = [],
       extra_prompt = "",
-      day_offset = 0
+      day_offset = 0,
+      force_refresh = false
     } = req.body || {};
 
     const safeDayOffset = clamp(Number(day_offset) || 0, 0, 2);
     const dateFrom = getDateShiftedYmd(safeDayOffset);
     const dateTo = dateFrom;
 
-    const fixtureResult = await getMatchesWithCache(dateFrom, dateTo);
+    const safeLimit = Math.max(1, Math.min(Number(match_limit) || 10, 20));
+
+    const fixtureResult = await getMatchesWithCache(dateFrom, dateTo, {
+      forceRefresh: !!force_refresh,
+      minNeeded: Math.max(MIN_CACHE_MATCHES, safeLimit)
+    });
 
     const allToday = fixtureResult.matches;
     const filtered = filterLeagueMode(allToday, league_mode, custom_leagues);
-
-    const safeLimit = Math.max(1, Math.min(Number(match_limit) || 10, 20));
     const selectedMatches = filtered.slice(0, safeLimit);
 
     if (!selectedMatches.length) {
@@ -1741,7 +1866,8 @@ app.post("/analyze", async (req, res) => {
               over25Rate: 0,
               firstHalf2PlusRate: 0,
               summary: "Veri alinamadi."
-            }
+            },
+            enrichmentLevel: "limited"
           }
         });
       }
