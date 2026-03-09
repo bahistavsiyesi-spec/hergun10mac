@@ -1,120 +1,962 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Bahis Asistanı Pro</title>
-<style>
-body{
-  background:#0b0f1a;
-  font-family:Arial,sans-serif;
-  color:white;
-  margin:0;
-  padding:40px;
-}
-.container{
-  max-width:1000px;
-  margin:auto;
-}
-h1{
-  color:#00ff87;
-}
-button{
-  background:#00ff87;
-  border:none;
-  padding:15px 30px;
-  font-size:16px;
-  border-radius:8px;
-  cursor:pointer;
-}
-button:hover{
-  opacity:.9;
-}
-.panel{
-  background:#111827;
-  padding:20px;
-  border-radius:10px;
-  margin-top:20px;
-}
-#results{
-  margin-top:30px;
-}
-.card{
-  background:#111827;
-  padding:20px;
-  border-radius:10px;
-  margin-bottom:15px;
-  border:1px solid #222;
-}
-.match{
-  font-size:18px;
-  font-weight:bold;
-}
-.league{
-  color:#aaa;
-  font-size:14px;
-}
-.stat{
-  margin-top:10px;
-  font-size:14px;
-}
-.reason{
-  margin-top:10px;
-  color:#ccc;
-}
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bahis Asistanı Pro</title>
+  <style>
+    :root{
+      --bg:#060816;
+      --bg2:#0b1022;
+      --card:#111733;
+      --card2:#151d3f;
+      --line:rgba(255,255,255,.08);
+      --text:#edf2ff;
+      --muted:#9aa5c3;
+      --green:#00f28a;
+      --green2:#0ad16f;
+      --yellow:#ffd54a;
+      --red:#ff5c74;
+      --blue:#4fc3f7;
+      --purple:#b39ddb;
+    }
+
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+      margin:0;
+      font-family:Arial, Helvetica, sans-serif;
+      color:var(--text);
+      background:
+        radial-gradient(circle at 15% 10%, rgba(0,242,138,.08), transparent 28%),
+        radial-gradient(circle at 85% 15%, rgba(79,195,247,.08), transparent 22%),
+        linear-gradient(180deg, #050814 0%, #080b1e 100%);
+      min-height:100vh;
+    }
+
+    .container{
+      width:min(1120px, calc(100% - 28px));
+      margin:0 auto;
+      padding:26px 0 60px;
+    }
+
+    .topbar{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:16px;
+      flex-wrap:wrap;
+      margin-bottom:22px;
+    }
+
+    .brand{
+      display:flex;
+      align-items:center;
+      gap:14px;
+    }
+
+    .brand-icon{
+      width:52px;
+      height:52px;
+      border-radius:16px;
+      display:grid;
+      place-items:center;
+      background:linear-gradient(135deg, rgba(0,242,138,.16), rgba(0,242,138,.06));
+      border:1px solid rgba(0,242,138,.2);
+      font-size:28px;
+      box-shadow:0 0 20px rgba(0,242,138,.12);
+    }
+
+    .brand h1{
+      margin:0;
+      font-size:26px;
+      line-height:1.1;
+      color:var(--green);
+    }
+
+    .brand p{
+      margin:4px 0 0;
+      color:var(--muted);
+      font-size:13px;
+    }
+
+    .meta{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+    }
+
+    .meta-box{
+      background:rgba(255,255,255,.03);
+      border:1px solid var(--line);
+      border-radius:14px;
+      padding:10px 14px;
+      min-width:150px;
+    }
+
+    .meta-box .label{
+      color:var(--muted);
+      font-size:11px;
+      margin-bottom:4px;
+      text-transform:uppercase;
+      letter-spacing:.8px;
+    }
+
+    .meta-box .value{
+      color:var(--yellow);
+      font-weight:700;
+      font-size:13px;
+    }
+
+    .panel{
+      background:linear-gradient(180deg, rgba(17,23,51,.96), rgba(12,16,36,.96));
+      border:1px solid var(--line);
+      border-radius:20px;
+      padding:20px;
+      box-shadow:0 14px 40px rgba(0,0,0,.24);
+      margin-bottom:18px;
+    }
+
+    .panel-title{
+      margin:0 0 14px;
+      font-size:20px;
+      color:var(--green);
+    }
+
+    .controls{
+      display:grid;
+      grid-template-columns:1.1fr .9fr;
+      gap:18px;
+    }
+
+    .field{
+      margin-bottom:12px;
+    }
+
+    .field label{
+      display:block;
+      font-size:12px;
+      color:var(--muted);
+      margin-bottom:6px;
+      text-transform:uppercase;
+      letter-spacing:.8px;
+    }
+
+    .field input,
+    .field select,
+    .field textarea{
+      width:100%;
+      border:1px solid var(--line);
+      background:rgba(255,255,255,.03);
+      color:var(--text);
+      border-radius:12px;
+      padding:12px 14px;
+      outline:none;
+      font-size:14px;
+    }
+
+    .field textarea{
+      min-height:132px;
+      resize:vertical;
+    }
+
+    .row2{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:12px;
+    }
+
+    .help{
+      color:var(--muted);
+      font-size:12px;
+      line-height:1.5;
+      margin-top:6px;
+    }
+
+    .actions{
+      display:flex;
+      gap:12px;
+      flex-wrap:wrap;
+      margin-top:8px;
+    }
+
+    .btn{
+      border:none;
+      cursor:pointer;
+      border-radius:14px;
+      padding:15px 22px;
+      font-size:15px;
+      font-weight:700;
+      transition:.2s ease;
+    }
+
+    .btn-primary{
+      background:linear-gradient(135deg, var(--green), var(--green2));
+      color:#04120a;
+      box-shadow:0 10px 24px rgba(0,242,138,.18);
+    }
+
+    .btn-secondary{
+      background:rgba(255,255,255,.04);
+      color:var(--text);
+      border:1px solid var(--line);
+    }
+
+    .btn:hover{transform:translateY(-1px)}
+    .btn:disabled{opacity:.6; cursor:not-allowed; transform:none}
+
+    .status-box,
+    .error-box{
+      display:none;
+      border-radius:16px;
+      padding:16px 18px;
+      margin-bottom:18px;
+      border:1px solid var(--line);
+    }
+
+    .status-box.active{
+      display:block;
+      background:rgba(0,242,138,.06);
+      border-color:rgba(0,242,138,.18);
+    }
+
+    .error-box.active{
+      display:block;
+      background:rgba(255,92,116,.08);
+      border-color:rgba(255,92,116,.22);
+      color:#ffd7de;
+    }
+
+    .loading-steps{
+      list-style:none;
+      padding:0;
+      margin:12px 0 0;
+      display:grid;
+      gap:8px;
+    }
+
+    .loading-steps li{
+      border:1px solid var(--line);
+      border-radius:12px;
+      padding:10px 12px;
+      color:var(--muted);
+      background:rgba(255,255,255,.02);
+    }
+
+    .loading-steps li.active{
+      color:var(--text);
+      border-color:rgba(255,213,74,.28);
+    }
+
+    .loading-steps li.done{
+      color:var(--green);
+      border-color:rgba(0,242,138,.22);
+    }
+
+    .grid{
+      display:grid;
+      grid-template-columns:2fr 1fr;
+      gap:18px;
+      align-items:start;
+    }
+
+    .section-head{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      flex-wrap:wrap;
+      margin-bottom:14px;
+    }
+
+    .section-title{
+      margin:0;
+      font-size:22px;
+      color:var(--green);
+    }
+
+    .pill{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      background:rgba(0,242,138,.09);
+      color:var(--green);
+      border:1px solid rgba(0,242,138,.2);
+      border-radius:999px;
+      padding:8px 12px;
+      font-size:12px;
+      font-weight:700;
+    }
+
+    .tips-list{
+      display:grid;
+      gap:16px;
+    }
+
+    .tip-card{
+      background:linear-gradient(180deg, rgba(17,23,51,.98), rgba(12,16,36,.98));
+      border:1px solid var(--line);
+      border-radius:18px;
+      overflow:hidden;
+      box-shadow:0 10px 28px rgba(0,0,0,.18);
+    }
+
+    .tip-top{
+      padding:16px 18px;
+      border-bottom:1px solid var(--line);
+      display:flex;
+      justify-content:space-between;
+      gap:12px;
+      flex-wrap:wrap;
+      align-items:flex-start;
+    }
+
+    .match-name{
+      font-size:18px;
+      font-weight:700;
+      margin:0;
+    }
+
+    .match-sub{
+      margin-top:5px;
+      color:var(--muted);
+      font-size:13px;
+    }
+
+    .badges{
+      display:flex;
+      flex-wrap:wrap;
+      gap:8px;
+    }
+
+    .badge{
+      padding:7px 10px;
+      border-radius:999px;
+      font-size:11px;
+      font-weight:700;
+      border:1px solid transparent;
+      white-space:nowrap;
+    }
+
+    .badge-green{
+      background:rgba(0,242,138,.12);
+      color:var(--green);
+      border-color:rgba(0,242,138,.2);
+    }
+
+    .badge-yellow{
+      background:rgba(255,213,74,.12);
+      color:var(--yellow);
+      border-color:rgba(255,213,74,.2);
+    }
+
+    .badge-red{
+      background:rgba(255,92,116,.12);
+      color:var(--red);
+      border-color:rgba(255,92,116,.2);
+    }
+
+    .badge-blue{
+      background:rgba(79,195,247,.12);
+      color:var(--blue);
+      border-color:rgba(79,195,247,.2);
+    }
+
+    .tip-body{
+      padding:16px 18px 18px;
+      display:grid;
+      grid-template-columns:1.05fr .95fr;
+      gap:16px;
+    }
+
+    .box{
+      background:rgba(255,255,255,.02);
+      border:1px solid var(--line);
+      border-radius:14px;
+      padding:14px;
+    }
+
+    .box-title{
+      font-size:12px;
+      color:var(--muted);
+      text-transform:uppercase;
+      letter-spacing:.8px;
+      margin-bottom:10px;
+    }
+
+    .prob-row{
+      display:grid;
+      grid-template-columns:150px 1fr 48px;
+      gap:10px;
+      align-items:center;
+      margin-bottom:10px;
+      font-size:13px;
+    }
+
+    .bar{
+      height:9px;
+      background:rgba(255,255,255,.06);
+      border-radius:999px;
+      overflow:hidden;
+    }
+
+    .bar-fill{
+      height:100%;
+      border-radius:999px;
+    }
+
+    .mono{
+      font-family:monospace;
+      font-weight:700;
+    }
+
+    .stats-mini{
+      display:grid;
+      grid-template-columns:repeat(2,1fr);
+      gap:10px;
+      margin-top:10px;
+    }
+
+    .mini{
+      background:rgba(255,255,255,.025);
+      border:1px solid var(--line);
+      border-radius:12px;
+      padding:10px 11px;
+    }
+
+    .mini-label{
+      color:var(--muted);
+      font-size:11px;
+      margin-bottom:5px;
+      text-transform:uppercase;
+      letter-spacing:.7px;
+    }
+
+    .mini-value{
+      font-size:13px;
+      line-height:1.45;
+    }
+
+    .reason-list{
+      display:grid;
+      gap:8px;
+    }
+
+    .reason{
+      font-size:13px;
+      line-height:1.5;
+      padding:10px 11px;
+      border-radius:12px;
+      border:1px solid var(--line);
+      background:rgba(255,255,255,.02);
+    }
+
+    .coupon-panel{
+      position:sticky;
+      top:14px;
+    }
+
+    .coupon-card{
+      background:linear-gradient(180deg, rgba(17,23,51,.98), rgba(12,16,36,.98));
+      border:1px solid var(--line);
+      border-radius:18px;
+      padding:16px;
+      margin-bottom:14px;
+    }
+
+    .coupon-card h3{
+      margin:0 0 12px;
+      font-size:18px;
+      color:var(--green);
+    }
+
+    .coupon-list{
+      display:grid;
+      gap:10px;
+    }
+
+    .coupon-item{
+      border:1px solid var(--line);
+      border-radius:12px;
+      padding:11px 12px;
+      background:rgba(255,255,255,.025);
+    }
+
+    .coupon-item strong{
+      display:block;
+      font-size:13px;
+      margin-bottom:4px;
+      line-height:1.4;
+    }
+
+    .coupon-meta{
+      color:var(--muted);
+      font-size:12px;
+      line-height:1.45;
+    }
+
+    .footer-note{
+      margin-top:8px;
+      color:var(--muted);
+      font-size:12px;
+      line-height:1.6;
+    }
+
+    .empty{
+      padding:24px;
+      text-align:center;
+      color:var(--muted);
+      border:1px dashed var(--line);
+      border-radius:16px;
+      background:rgba(255,255,255,.02);
+    }
+
+    @media (max-width: 980px){
+      .controls,
+      .grid,
+      .tip-body{
+        grid-template-columns:1fr;
+      }
+      .coupon-panel{
+        position:static;
+      }
+    }
+
+    @media (max-width: 640px){
+      .container{
+        width:min(100% - 18px, 1120px);
+      }
+      body{
+        padding:0;
+      }
+      .prob-row{
+        grid-template-columns:1fr;
+      }
+      .stats-mini{
+        grid-template-columns:1fr;
+      }
+      .row2{
+        grid-template-columns:1fr;
+      }
+      .topbar{
+        align-items:flex-start;
+      }
+      .brand h1{
+        font-size:23px;
+      }
+    }
+  </style>
 </head>
 <body>
-<div class="container">
-  <h1>⚽ Bahis Asistanı Pro</h1>
+  <div class="container">
 
-  <div class="panel">
-    <button onclick="analiz()">Derin Analiz Başlat</button>
+    <div class="topbar">
+      <div class="brand">
+        <div class="brand-icon">⚽</div>
+        <div>
+          <h1>Bahis Asistanı Pro</h1>
+          <p>Gerçek form verisi · AI risk skoru · otomatik kupon</p>
+        </div>
+      </div>
+
+      <div class="meta">
+        <div class="meta-box">
+          <div class="label">Tarih</div>
+          <div class="value" id="todayLabel">—</div>
+        </div>
+        <div class="meta-box">
+          <div class="label">Backend</div>
+          <div class="value">Render aktif</div>
+        </div>
+      </div>
+    </div>
+
+    <section class="panel">
+      <h2 class="panel-title">Analiz Motoru Ayarları</h2>
+
+      <div class="controls">
+        <div>
+          <div class="field">
+            <label>Backend endpoint</label>
+            <input id="apiUrl" value="https://hergun10mac.onrender.com/analyze" />
+            <div class="help">Bu alan hazır geliyor. İstersen backend adresini sonradan değiştirebilirsin.</div>
+          </div>
+
+          <div class="field">
+            <label>Ek analiz notu</label>
+            <textarea id="extraPrompt">Analiz aşamasında özellikle son form, gol ortalamaları, H2H özeti, risk seviyesi ve kupon uygunluğu dikkate alınsın.</textarea>
+          </div>
+        </div>
+
+        <div>
+          <div class="row2">
+            <div class="field">
+              <label>Lig filtresi</label>
+              <select id="leagueMode">
+                <option value="all">Tüm ligler</option>
+                <option value="major">Büyük ligler</option>
+                <option value="custom">Özel lig</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label>Maç sayısı</label>
+              <select id="matchLimit">
+                <option value="5">5</option>
+                <option value="8">8</option>
+                <option value="10" selected>10</option>
+                <option value="12">12</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Özel ligler</label>
+            <input id="customLeagues" placeholder="Serie A, Premier League, La Liga" />
+          </div>
+
+          <div class="actions">
+            <button class="btn btn-primary" id="analyzeBtn">⚡ Derin Analiz Başlat</button>
+            <button class="btn btn-secondary" id="scrollCouponBtn">🎯 Kuponlara Git</button>
+          </div>
+
+          <div class="footer-note">
+            Sistem önce backend verisini toplar, sonra AI destekli analiz üretir. AI boş dönerse güvenli yedek analiz gösterilir.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="status-box" id="statusBox">
+      <strong>Analiz hazırlanıyor...</strong>
+      <ul class="loading-steps">
+        <li id="s1">Günün maçları çekiliyor</li>
+        <li id="s2">Takım form verileri işleniyor</li>
+        <li id="s3">H2H ve risk hesapları hazırlanıyor</li>
+        <li id="s4">AI değerlendirmesi yapılıyor</li>
+        <li id="s5">Kuponlar ve kartlar oluşturuluyor</li>
+      </ul>
+    </div>
+
+    <div class="error-box" id="errorBox"></div>
+
+    <div class="grid">
+      <section class="panel">
+        <div class="section-head">
+          <h2 class="section-title">Maç Analizleri</h2>
+          <div class="pill" id="countPill">0 maç</div>
+        </div>
+
+        <div id="tipsList" class="tips-list">
+          <div class="empty">Henüz analiz başlatılmadı.</div>
+        </div>
+      </section>
+
+      <aside class="coupon-panel" id="couponPanel">
+        <div class="coupon-card">
+          <h3>🔥 En Güvenli Kupon</h3>
+          <div id="couponSafest" class="coupon-list">
+            <div class="empty">Kupon verisi bekleniyor.</div>
+          </div>
+        </div>
+
+        <div class="coupon-card">
+          <h3>⚖️ Dengeli Kupon</h3>
+          <div id="couponBalanced" class="coupon-list">
+            <div class="empty">Kupon verisi bekleniyor.</div>
+          </div>
+        </div>
+
+        <div class="coupon-card">
+          <h3>🎲 Sürpriz Kupon</h3>
+          <div id="couponSurprise" class="coupon-list">
+            <div class="empty">Kupon verisi bekleniyor.</div>
+          </div>
+        </div>
+      </aside>
+    </div>
   </div>
 
-  <div id="results"></div>
-</div>
+  <script>
+    const analyzeBtn = document.getElementById("analyzeBtn");
+    const scrollCouponBtn = document.getElementById("scrollCouponBtn");
+    const statusBox = document.getElementById("statusBox");
+    const errorBox = document.getElementById("errorBox");
+    const tipsList = document.getElementById("tipsList");
+    const countPill = document.getElementById("countPill");
+    const todayLabel = document.getElementById("todayLabel");
 
-<script>
-async function analiz(){
-  document.getElementById("results").innerHTML = "Analiz yapılıyor...";
+    function setToday() {
+      const d = new Date();
+      todayLabel.textContent = d.toLocaleDateString("tr-TR", {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+        year: "numeric"
+      });
+    }
 
-  const r = await fetch("https://hergun10mac.onrender.com/analyze", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      match_limit: 10
-    })
-  });
+    setToday();
 
-  const data = await r.json();
-  let html = "";
+    function setStep(id, state) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.classList.remove("active", "done");
+      if (state) el.classList.add(state);
+    }
 
-  if (!data.tips || data.tips.length === 0) {
-    document.getElementById("results").innerHTML = "Bugün uygun maç bulunamadı.";
-    return;
-  }
+    function resetSteps() {
+      ["s1","s2","s3","s4","s5"].forEach(id => setStep(id, ""));
+    }
 
-  data.tips.forEach(t => {
-    html += `
-      <div class="card">
-        <div class="match">${t.match}</div>
-        <div class="league">${t.league} - ${t.time}</div>
-        <div class="stat">Tahmin: ${t.result_prediction}</div>
-        <div class="stat">Skor: ${t.score_prediction}</div>
-        <div class="stat">2.5 Üst: %${t.prob_over25}</div>
-        <div class="stat">İlk Yarı 2+ Gol: %${t.prob_first_half_2plus}</div>
-        <div class="stat">KG Var: %${t.prob_btts}</div>
-        <div class="stat">Güven: ${t.confidence}</div>
-        <div class="reason">${Array.isArray(t.reasons) ? t.reasons.join("<br>") : ""}</div>
-      </div>
-    `;
-  });
+    function playSteps() {
+      const delays = [0, 1200, 2600, 4200, 5800];
+      delays.forEach((delay, index) => {
+        setTimeout(() => {
+          if (index > 0) setStep("s" + index, "done");
+          setStep("s" + (index + 1), "active");
+        }, delay);
+      });
+    }
 
-  document.getElementById("results").innerHTML = html;
-}
-</script>
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function getRiskBadge(text) {
+      const t = String(text || "").toLowerCase();
+      if (t.includes("yüksek risk")) return { cls: "badge-red", label: text };
+      if (t.includes("orta risk")) return { cls: "badge-yellow", label: text };
+      return { cls: "badge-green", label: text || "Düşük Risk" };
+    }
+
+    function getConfidenceBadge(text) {
+      const t = String(text || "").toLowerCase();
+      if (t.includes("çok")) return { cls: "badge-blue", label: text };
+      if (t.includes("yüksek")) return { cls: "badge-green", label: text };
+      if (t.includes("orta")) return { cls: "badge-yellow", label: text };
+      return { cls: "badge-red", label: text || "Düşük" };
+    }
+
+    function probColor(value) {
+      if (value >= 70) return "linear-gradient(90deg, #00f28a, #13d676)";
+      if (value >= 50) return "linear-gradient(90deg, #ffd54a, #ffb74d)";
+      return "linear-gradient(90deg, #ff5c74, #ff7e5f)";
+    }
+
+    function renderCoupons(coupons) {
+      renderCouponList("couponSafest", coupons?.safest || []);
+      renderCouponList("couponBalanced", coupons?.balanced || []);
+      renderCouponList("couponSurprise", coupons?.surprise || []);
+    }
+
+    function renderCouponList(targetId, items) {
+      const el = document.getElementById(targetId);
+      if (!el) return;
+
+      if (!items.length) {
+        el.innerHTML = `<div class="empty">Kupon verisi bulunamadı.</div>`;
+        return;
+      }
+
+      el.innerHTML = items.map(item => `
+        <div class="coupon-item">
+          <strong>${escapeHtml(item.match || "Maç yok")}</strong>
+          <div class="coupon-meta">
+            Öneri: ${escapeHtml(item.bet || "—")}<br>
+            Güven: ${escapeHtml(item.confidence || "—")}
+            ${item.risk ? `<br>Risk: ${escapeHtml(item.risk)}` : ""}
+          </div>
+        </div>
+      `).join("");
+    }
+
+    function renderTips(tips) {
+      if (!Array.isArray(tips) || !tips.length) {
+        tipsList.innerHTML = `<div class="empty">Uygun maç bulunamadı.</div>`;
+        countPill.textContent = "0 maç";
+        return;
+      }
+
+      countPill.textContent = `${tips.length} maç`;
+
+      tipsList.innerHTML = tips.map((tip, index) => {
+        const conf = getConfidenceBadge(tip.confidence);
+        const risk = getRiskBadge(tip.risk_note);
+        const over25 = Number(tip.prob_over25 || 0);
+        const firstHalf = Number(tip.prob_first_half_2plus || 0);
+        const btts = Number(tip.prob_btts || 0);
+
+        return `
+          <article class="tip-card">
+            <div class="tip-top">
+              <div>
+                <h3 class="match-name">${index === 0 ? "🔥 " : ""}${escapeHtml(tip.match)}</h3>
+                <div class="match-sub">
+                  ${escapeHtml(tip.league)} • ${escapeHtml(tip.time)} • ${escapeHtml(tip.match_importance || "Normal")}
+                </div>
+              </div>
+
+              <div class="badges">
+                <span class="badge ${conf.cls}">Güven: ${escapeHtml(conf.label)}</span>
+                <span class="badge ${risk.cls}">${escapeHtml(risk.label)}</span>
+                <span class="badge badge-blue">Tahmin: ${escapeHtml(tip.result_prediction || "—")}</span>
+                <span class="badge badge-yellow">Skor: ${escapeHtml(tip.score_prediction || "—")}</span>
+              </div>
+            </div>
+
+            <div class="tip-body">
+              <div class="box">
+                <div class="box-title">Olasılık Analizi</div>
+
+                <div class="prob-row">
+                  <div>2.5 Gol Üstü</div>
+                  <div class="bar"><div class="bar-fill" style="width:${over25}%; background:${probColor(over25)}"></div></div>
+                  <div class="mono">%${over25}</div>
+                </div>
+
+                <div class="prob-row">
+                  <div>İlk Yarı 2+ Gol</div>
+                  <div class="bar"><div class="bar-fill" style="width:${firstHalf}%; background:${probColor(firstHalf)}"></div></div>
+                  <div class="mono">%${firstHalf}</div>
+                </div>
+
+                <div class="prob-row">
+                  <div>KG Var</div>
+                  <div class="bar"><div class="bar-fill" style="width:${btts}%; background:${probColor(btts)}"></div></div>
+                  <div class="mono">%${btts}</div>
+                </div>
+
+                <div class="stats-mini">
+                  <div class="mini">
+                    <div class="mini-label">Önerilen Bahis</div>
+                    <div class="mini-value">${escapeHtml(tip.recommended_bet || "—")}</div>
+                  </div>
+
+                  <div class="mini">
+                    <div class="mini-label">H2H Özeti</div>
+                    <div class="mini-value">${escapeHtml(tip.h2h_summary || "—")}</div>
+                  </div>
+
+                  <div class="mini">
+                    <div class="mini-label">Ev Formu</div>
+                    <div class="mini-value">${escapeHtml(tip.home_form || "—")}</div>
+                  </div>
+
+                  <div class="mini">
+                    <div class="mini-label">Dep Formu</div>
+                    <div class="mini-value">${escapeHtml(tip.away_form || "—")}</div>
+                  </div>
+
+                  <div class="mini">
+                    <div class="mini-label">Ev Gol Ort.</div>
+                    <div class="mini-value">${escapeHtml(tip.home_goals_avg || "—")} / Yediği ${escapeHtml(tip.home_conceded_avg || "—")}</div>
+                  </div>
+
+                  <div class="mini">
+                    <div class="mini-label">Dep Gol Ort.</div>
+                    <div class="mini-value">${escapeHtml(tip.away_goals_avg || "—")} / Yediği ${escapeHtml(tip.away_conceded_avg || "—")}</div>
+                  </div>
+
+                  <div class="mini">
+                    <div class="mini-label">Ev Performansı</div>
+                    <div class="mini-value">${escapeHtml(tip.home_performance || "—")}</div>
+                  </div>
+
+                  <div class="mini">
+                    <div class="mini-label">Dep Performansı</div>
+                    <div class="mini-value">${escapeHtml(tip.away_performance || "—")}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="box">
+                <div class="box-title">Kısa Analiz ve Risk</div>
+
+                <div class="reason-list">
+                  ${(Array.isArray(tip.reasons) ? tip.reasons : []).map(r => `
+                    <div class="reason">🧠 ${escapeHtml(r)}</div>
+                  `).join("")}
+
+                  <div class="reason">📊 Lig / tablo bağlamı: ${escapeHtml(tip.table_context || "Veri yok")}</div>
+                  <div class="reason">⚠️ Risk notu: ${escapeHtml(tip.risk_note || "Yok")}</div>
+                </div>
+              </div>
+            </div>
+          </article>
+        `;
+      }).join("");
+    }
+
+    function buildPayload() {
+      const leagueMode = document.getElementById("leagueMode").value;
+      const customLeagues = document.getElementById("customLeagues").value
+        .split(",")
+        .map(x => x.trim())
+        .filter(Boolean);
+
+      return {
+        match_limit: Number(document.getElementById("matchLimit").value),
+        league_mode: leagueMode,
+        custom_leagues: leagueMode === "custom" ? customLeagues : [],
+        extra_prompt: document.getElementById("extraPrompt").value.trim()
+      };
+    }
+
+    async function analyze() {
+      analyzeBtn.disabled = true;
+      errorBox.classList.remove("active");
+      errorBox.textContent = "";
+      statusBox.classList.add("active");
+      resetSteps();
+      playSteps();
+
+      try {
+        const apiUrl = document.getElementById("apiUrl").value.trim();
+        if (!apiUrl) throw new Error("Backend endpoint alanı boş.");
+
+        const response = await fetch(apiUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(buildPayload())
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`Sunucu hatası (${response.status}): ${text.slice(0, 250)}`);
+        }
+
+        const data = await response.json();
+
+        ["s1","s2","s3","s4","s5"].forEach(id => setStep(id, "done"));
+
+        setTimeout(() => {
+          statusBox.classList.remove("active");
+          renderTips(data.tips || []);
+          renderCoupons(data.coupons || {});
+        }, 400);
+
+      } catch (err) {
+        statusBox.classList.remove("active");
+        errorBox.textContent = "⚠️ " + (err?.message || "Bilinmeyen hata");
+        errorBox.classList.add("active");
+      } finally {
+        analyzeBtn.disabled = false;
+      }
+    }
+
+    analyzeBtn.addEventListener("click", analyze);
+
+    scrollCouponBtn.addEventListener("click", () => {
+      document.getElementById("couponPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  </script>
 </body>
 </html>
