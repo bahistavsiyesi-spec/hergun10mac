@@ -49,10 +49,13 @@ function normalizeMatches(matches = []) {
     status: m.status,
     league: m.competition?.name || "Bilinmeyen Lig",
     leagueCode: m.competition?.code || "",
+    competitionId: m.competition?.id || null,
     stage: m.stage || "",
     matchday: m.matchday || null,
     homeTeam: m.homeTeam?.name || "Ev Sahibi",
-    awayTeam: m.awayTeam?.name || "Deplasman"
+    awayTeam: m.awayTeam?.name || "Deplasman",
+    homeTeamId: m.homeTeam?.id || null,
+    awayTeamId: m.awayTeam?.id || null
   }));
 }
 
@@ -64,15 +67,15 @@ function filterByLeagueMode(matches, leagueMode, customLeagues) {
 
   if (leagueMode === "major") {
     const majorCodes = new Set([
-      "PL",   // Premier League
-      "PD",   // La Liga
-      "BL1",  // Bundesliga
-      "SA",   // Serie A
-      "FL1",  // Ligue 1
-      "CL",   // Champions League
-      "EL",   // Europa League
-      "PPL",  // Primeira Liga
-      "DED"   // Eredivisie
+      "PL",
+      "PD",
+      "BL1",
+      "SA",
+      "FL1",
+      "CL",
+      "EL",
+      "PPL",
+      "DED"
     ]);
     return matches.filter((m) => majorCodes.has(m.leagueCode));
   }
@@ -80,28 +83,360 @@ function filterByLeagueMode(matches, leagueMode, customLeagues) {
   return matches;
 }
 
-function buildPrompt(payload, matches) {
+function avg(nums = []) {
+  if (!nums.length) return 0;
+  return nums.reduce((a, b) => a + b, 0) / nums.length;
+}
+
+function formString(results = []) {
+  return results.map((r) => r.result).join("-") || "—";
+}
+
+function computeTeamRecentStats(matches = [], teamId) {
+  const relevant = matches
+    .filter((m) => m.homeTeam?.id === teamId || m.awayTeam?.id === teamId)
+    .slice(0, 10);
+
+  let wins = 0;
+  let draws = 0;
+  let losses = 0;
+  const scored = [];
+  const conceded = [];
+  const homeMatches = [];
+  const awayMatches = [];
+  const recent = [];
+
+  for (const m of relevant) {
+    const isHome = m.homeTeam?.id === teamId;
+    const gf = isHome ? (m.score?.fullTime?.home ?? 0) : (m.score?.fullTime?.away ?? 0);
+    const ga = isHome ? (m.score?.fullTime?.away ?? 0) : (m.score?.fullTime?.home ?? 0);
+
+    let result = "B";
+    if (gf > ga) {
+      wins += 1;
+      result = "G";
+    } else if (gf < ga) {
+      losses += 1;
+      result = "M";
+    } else {
+      draws += 1;
+    }
+
+    scored.push(gf);
+    conceded.push(ga);
+    recent.push({ result, gf, ga });
+
+    if (isHome) homeMatches.push({ gf, ga, result });
+    else awayMatches.push({ gf, ga, result });
+  }
+
+  const homeAvgFor = avg(homeMatches.map((x) => x.gf));
+  const awayAvgFor = avg(awayMatches.map((x) => x.gf));
+  const homeAvgAgainst = avg(homeMatches.map((x) => x.ga));
+  const awayAvgAgainst = avg(awayMatches.map((x) => x.ga));
+
+  return {
+    played: relevant.length,
+    wins,
+    draws,
+    losses,
+    form: formString(recent),
+    goalsForAvg: avg(scored).toFixed(2),
+    goalsAgainstAvg: avg(conceded).toFixed(2),
+    homeGoalsForAvg: homeAvgFor ? homeAvgFor.toFixed(2) : "0.00",
+    awayGoalsForAvg: awayAvgFor ? awayAvgFor.toFixed(2) : "0.00",
+    homeGoalsAgainstAvg: homeAvgAgainst ? homeAvgAgainst.toFixed(2) : "0.00",
+    awayGoalsAgainstAvg: awayAvgAgainst ? awayAvgAgainst.toFixed(2) : "0.00",
+    recent
+  };
+}
+
+function computeH2H(matches = [], homeTeamId, awayTeamId) {
+  const relevant = matches
+    .filter((m) => {
+      const h = m.homeTeam?.id;
+      const a = m.awayTeam?.id;
+      return (
+        (h === homeTeamId && a === awayTeamId) ||
+        (h === awayTeamId && a === homeTeamId)
+      );
+    })
+    .slice(0, 5);
+
+  let homePerspectiveWins = 0;
+  let draws = 0;
+  let homePerspectiveLosses = 0;
+  let totalGoals = 0;
+
+  for (const m of relevant) {
+    const hg = m.score?.fullTime?.home ?? 0;
+    const ag = m.score?.fullTime?.away ?? 0;
+    totalGoals += hg + ag;
+
+    const listedHomeIsActualHome = m.homeTeam?.id === homeTeamId;
+    const teamGoals = listedHomeIsActualHome ? hg : ag;
+    const oppGoals = listedHomeIsActualHome ? ag : hg;
+
+    if (teamGoals > oppGoals) homePerspectiveWins += 1;
+    else if (teamGoals < oppGoals) homePerspectiveLosses += 1;
+    else draws += 1;
+  }
+
+  const avgGoals = relevant.length ? (totalGoals / relevant.length).toFixed(1) : "0.0";
+
+  return {
+    count: relevant.length,
+    summary: relevant.length
+      ? `Son ${relevant.length} H2H: ${homePerspectiveWins}G ${draws}B ${homePerspectiveLosses}M, maç başı ${avgGoals} gol`
+      : "H2H verisi sınırlı",
+    avgGoals: Number(avgGoals)
+  };
+}
+
+function safeNum(x) {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function computeRiskAndProbabilities(homeStats, awayStats, h2h, standings = null) {
+  const homeAttack = safeNum(homeStats.goalsForAvg);
+  const awayAttack = safeNum(awayStats.goalsForAvg);
+  const homeDefenseLeak = safeNum(homeStats.goalsAgainstAvg);
+  const awayDefenseLeak = safeNum(awayStats.goalsAgainstAvg);
+  const h2hGoals = safeNum(h2h.avgGoals);
+
+  const over25 = clamp(
+    Math.round(35 + homeAttack * 10 + awayAttack * 8 + h2hGoals * 4 + awayDefenseLeak * 5 + homeDefenseLeak * 4),
+    25,
+    88
+  );
+
+  const btts = clamp(
+    Math.round(30 + homeAttack * 9 + awayAttack * 9 + homeDefenseLeak * 6 + awayDefenseLeak * 6),
+    20,
+    85
+  );
+
+  const firstHalf2 = clamp(
+    Math.round((over25 * 0.42) + (btts * 0.12)),
+    12,
+    60
+  );
+
+  const homeStrength =
+    safeNum(homeStats.goalsForAvg) -
+    safeNum(homeStats.goalsAgainstAvg) +
+    safeNum(homeStats.homeGoalsForAvg) * 0.4;
+
+  const awayStrength =
+    safeNum(awayStats.goalsForAvg) -
+    safeNum(awayStats.goalsAgainstAvg) +
+    safeNum(awayStats.awayGoalsForAvg) * 0.3;
+
+  let resultPrediction = "X";
+  if (homeStrength - awayStrength > 0.35) resultPrediction = "1";
+  else if (awayStrength - homeStrength > 0.35) resultPrediction = "2";
+
+  let confidence = "Orta";
+  const diff = Math.abs(homeStrength - awayStrength);
+
+  if (diff > 1.2) confidence = "Çok Yüksek";
+  else if (diff > 0.7) confidence = "Yüksek";
+  else if (diff < 0.2) confidence = "Düşük";
+
+  let riskScore = 50;
+  riskScore -= diff * 18;
+  riskScore += Math.abs(over25 - 60) < 8 ? 8 : 0;
+  riskScore += h2h.count < 2 ? 10 : 0;
+  riskScore += homeStats.played < 5 || awayStats.played < 5 ? 12 : 0;
+
+  if (standings?.homeRank && standings?.awayRank) {
+    const rankGap = Math.abs(standings.homeRank - standings.awayRank);
+    riskScore -= Math.min(rankGap, 10);
+  }
+
+  riskScore = clamp(Math.round(riskScore), 10, 90);
+
+  const riskLabel =
+    riskScore >= 70 ? "Yüksek Risk" :
+    riskScore >= 45 ? "Orta Risk" :
+    "Düşük Risk";
+
+  return {
+    over25,
+    btts,
+    firstHalf2,
+    resultPrediction,
+    confidence,
+    riskScore,
+    riskLabel
+  };
+}
+
+function deriveScorePrediction(resultPrediction, over25, btts) {
+  if (resultPrediction === "1") {
+    if (over25 >= 65 && btts >= 55) return "2-1";
+    if (over25 >= 65) return "3-1";
+    return "1-0";
+  }
+  if (resultPrediction === "2") {
+    if (over25 >= 65 && btts >= 55) return "1-2";
+    if (over25 >= 65) return "1-3";
+    return "0-1";
+  }
+  if (over25 >= 65) return "2-2";
+  return "1-1";
+}
+
+function deriveBet(resultPrediction, over25, btts) {
+  if (over25 >= 70) return "2.5 Üst";
+  if (btts >= 65) return "KG Var";
+  if (resultPrediction === "1") return "MS1";
+  if (resultPrediction === "2") return "MS2";
+  return "X Çifte Şans";
+}
+
+function computeCouponBuckets(tips = []) {
+  const sorted = [...tips].sort((a, b) => {
+    const aScore = (a.confidenceScore ?? 0) - (a.riskScore ?? 0);
+    const bScore = (b.confidenceScore ?? 0) - (b.riskScore ?? 0);
+    return bScore - aScore;
+  });
+
+  return {
+    safest: sorted.slice(0, 3).map((t) => ({
+      match: t.match,
+      bet: t.recommended_bet,
+      confidence: t.confidence,
+      risk: t.risk_note
+    })),
+    balanced: sorted.slice(0, 5).map((t) => ({
+      match: t.match,
+      bet: t.recommended_bet,
+      confidence: t.confidence
+    })),
+    surprise: [...tips]
+      .sort((a, b) => (b.prob_btts + b.prob_over25) - (a.prob_btts + a.prob_over25))
+      .slice(0, 3)
+      .map((t) => ({
+        match: t.match,
+        bet: t.prob_btts >= t.prob_over25 ? "KG Var" : "2.5 Üst",
+        confidence: t.confidence
+      }))
+  };
+}
+
+function buildFallbackTip(match, homeStats, awayStats, h2h, standings = null) {
+  const calc = computeRiskAndProbabilities(homeStats, awayStats, h2h, standings);
+  const scorePrediction = deriveScorePrediction(calc.resultPrediction, calc.over25, calc.btts);
+  const recommendedBet = deriveBet(calc.resultPrediction, calc.over25, calc.btts);
+
+  const homeRank = standings?.homeRank ? `Ev sıra ${standings.homeRank}` : "Ev sıra bilinmiyor";
+  const awayRank = standings?.awayRank ? `Dep sıra ${standings.awayRank}` : "Dep sıra bilinmiyor";
+
+  const confidenceScore =
+    calc.confidence === "Çok Yüksek" ? 90 :
+    calc.confidence === "Yüksek" ? 75 :
+    calc.confidence === "Orta" ? 58 : 42;
+
+  return {
+    match: `${match.homeTeam} - ${match.awayTeam}`,
+    league: match.league || "Bilinmeyen Lig",
+    time: match.time || "—",
+    result_prediction: calc.resultPrediction,
+    prob_over25: calc.over25,
+    prob_first_half_2plus: calc.firstHalf2,
+    prob_btts: calc.btts,
+    score_prediction: scorePrediction,
+    recommended_bet: recommendedBet,
+    reasons: [
+      `Ev sahibi formu ${homeStats.form}, deplasman formu ${awayStats.form}.`,
+      `Gol ortalamaları ${homeStats.goalsForAvg} / ${awayStats.goalsForAvg}; savunma ortalamaları ${homeStats.goalsAgainstAvg} / ${awayStats.goalsAgainstAvg}.`,
+      `${h2h.summary}`
+    ],
+    confidence: calc.confidence,
+    h2h_summary: h2h.summary,
+    home_form: homeStats.form,
+    away_form: awayStats.form,
+    home_goals_avg: homeStats.goalsForAvg,
+    away_goals_avg: awayStats.goalsForAvg,
+    home_conceded_avg: homeStats.goalsAgainstAvg,
+    away_conceded_avg: awayStats.goalsAgainstAvg,
+    home_performance: `G/B/M: ${homeStats.wins}/${homeStats.draws}/${homeStats.losses} | İç saha gol ort: ${homeStats.homeGoalsForAvg}`,
+    away_performance: `G/B/M: ${awayStats.wins}/${awayStats.draws}/${awayStats.losses} | Deplasman gol ort: ${awayStats.awayGoalsForAvg}`,
+    table_context: `${homeRank} | ${awayRank}`,
+    match_importance:
+      standings?.homeRank && standings?.awayRank
+        ? (Math.min(standings.homeRank, standings.awayRank) <= 4
+            ? "Üst sıra yarışı"
+            : Math.max(standings.homeRank, standings.awayRank) >= 16
+              ? "Alt sıra baskısı"
+              : "Orta sıra mücadelesi")
+        : "Lig bağlamı sınırlı",
+    risk_note: `${calc.riskLabel} (${calc.riskScore}/100)`,
+    risk_score: calc.riskScore,
+    confidenceScore
+  };
+}
+
+async function getTeamMatches(teamId, limit = 10) {
+  try {
+    const data = await footballDataGet(`/teams/${teamId}/matches`, {
+      status: "FINISHED",
+      limit
+    });
+    return data.matches || [];
+  } catch {
+    return [];
+  }
+}
+
+async function getHeadToHead(matchId) {
+  try {
+    const data = await footballDataGet(`/matches/${matchId}/head2head`, { limit: 5 });
+    return data.matches || [];
+  } catch {
+    return [];
+  }
+}
+
+async function getStandings(competitionId) {
+  try {
+    const data = await footballDataGet(`/competitions/${competitionId}/standings`);
+    const table = data?.standings?.[0]?.table || [];
+    return table;
+  } catch {
+    return [];
+  }
+}
+
+function findTeamRank(table = [], teamId) {
+  const row = table.find((r) => r.team?.id === teamId);
+  return row?.position || null;
+}
+
+function buildPrompt(payload, enrichedMatches) {
   return `
-Sen profesyonel bir futbol analiz asistanısın.
+Sen profesyonel bir futbol veri analisti ve bahis risk değerlendiricisisin.
 
 Tarih: ${payload.date}
 İstenen maç sayısı: ${payload.match_limit}
 
-KULLANILABİLİR VERİ:
-- Günün maç listesi
-- Lig bilgisi
-- Saat bilgisi
-- Organizasyon / maç günü bilgisi
-
 GÖREV:
-- Verilen maç listesinden en güçlü ${payload.match_limit} maçı seç.
-- Seçim yaparken büyük ligler, organizasyon seviyesi ve genel risk dengesi gözet.
-- ÇIKTIYI yalnızca JSON olarak ver.
-- Uydurma maç ekleme.
-- Verilmeyen H2H veya son 10 maç datasını kesin veri gibi yazma; temkinli analiz dili kullan.
-- reasons alanı 2 veya 3 kısa madde olsun.
+- Verilen verilerden en güçlü ${payload.match_limit} maçı seç.
+- Form, gol ortalaması, savunma kırılganlığı, H2H özeti, lig sırası ve risk notuna göre karar ver.
+- reasons alanı 2 veya 3 kısa net madde olsun.
 - confidence sadece: Düşük, Orta, Yüksek, Çok Yüksek
 - result_prediction sadece: 1, X, 2
+- JSON dışında hiçbir şey yazma.
+- Verilerle çelişme.
+
+VERİ:
+${JSON.stringify(enrichedMatches, null, 2)}
 
 JSON ŞEMASI:
 {
@@ -118,27 +453,21 @@ JSON ŞEMASI:
       "recommended_bet": "2.5 Üst",
       "reasons": ["...", "..."],
       "confidence": "Orta",
-      "h2h_summary": "Veri sınırlı",
-      "home_form": "—",
-      "away_form": "—",
-      "home_goals_avg": "—",
-      "away_goals_avg": "—",
-      "home_conceded_avg": "—",
-      "away_conceded_avg": "—",
-      "home_performance": "Veri sınırlı",
-      "away_performance": "Veri sınırlı",
-      "table_context": "Lig bağlamı sınırlı",
-      "match_importance": "Normal",
-      "risk_note": "Veri sınırlı olduğu için ekstra risk var"
+      "h2h_summary": "Özet",
+      "home_form": "G-B-G-M-G",
+      "away_form": "M-B-G-M-B",
+      "home_goals_avg": "1.80",
+      "away_goals_avg": "1.10",
+      "home_conceded_avg": "0.90",
+      "away_conceded_avg": "1.40",
+      "home_performance": "Açıklama",
+      "away_performance": "Açıklama",
+      "table_context": "Açıklama",
+      "match_importance": "Açıklama",
+      "risk_note": "Açıklama"
     }
   ]
 }
-
-KULLANICI EK NOTU:
-${payload.extra_prompt || "Yok"}
-
-MAÇ LİSTESİ:
-${JSON.stringify(matches, null, 2)}
 `.trim();
 }
 
@@ -212,37 +541,6 @@ const outputSchema = {
   required: ["tips"]
 };
 
-function buildFallbackTips(matches, limit = 10) {
-  return matches.slice(0, limit).map((m, i) => ({
-    match: `${m.homeTeam} - ${m.awayTeam}`,
-    league: m.league || "Bilinmeyen Lig",
-    time: m.time || "—",
-    result_prediction: i % 3 === 0 ? "1" : i % 3 === 1 ? "X" : "2",
-    prob_over25: 55 + (i % 4) * 5,
-    prob_first_half_2plus: 22 + (i % 4) * 4,
-    prob_btts: 48 + (i % 5) * 5,
-    score_prediction: i % 3 === 0 ? "2-1" : i % 3 === 1 ? "1-1" : "1-2",
-    recommended_bet: "2.5 Üst",
-    reasons: [
-      "Maç programında öne çıkan resmi karşılaşmalardan seçildi.",
-      "Lig seviyesi ve genel denge dikkate alınarak önceliklendirildi."
-    ],
-    confidence: i < 2 ? "Yüksek" : "Orta",
-    h2h_summary: "Veri sınırlı",
-    home_form: "—",
-    away_form: "—",
-    home_goals_avg: "—",
-    away_goals_avg: "—",
-    home_conceded_avg: "—",
-    away_conceded_avg: "—",
-    home_performance: "Veri sınırlı",
-    away_performance: "Veri sınırlı",
-    table_context: "Lig bağlamı sınırlı",
-    match_importance: "Normal",
-    risk_note: "Veri sınırlı olduğu için ek risk var"
-  }));
-}
-
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
@@ -288,42 +586,93 @@ app.post("/analyze", async (req, res) => {
     matches = filterByLeagueMode(matches, payload.league_mode, payload.custom_leagues);
 
     if (!matches.length) {
-      return res.json({ tips: [] });
+      return res.json({
+        tips: [],
+        coupons: { safest: [], balanced: [], surprise: [] }
+      });
     }
 
-    if (!OPENAI_API_KEY || !client) {
-      return res.json({ tips: buildFallbackTips(matches, payload.match_limit) });
-    }
+    const enrichedMatches = [];
+    const standingsCache = new Map();
 
-    const prompt = buildPrompt(payload, matches);
+    for (const match of matches.slice(0, 12)) {
+      const [homeRecent, awayRecent, h2hMatches] = await Promise.all([
+        match.homeTeamId ? getTeamMatches(match.homeTeamId, 10) : Promise.resolve([]),
+        match.awayTeamId ? getTeamMatches(match.awayTeamId, 10) : Promise.resolve([]),
+        match.id ? getHeadToHead(match.id) : Promise.resolve([])
+      ]);
+
+      if (!standingsCache.has(match.competitionId)) {
+        const table = match.competitionId ? await getStandings(match.competitionId) : [];
+        standingsCache.set(match.competitionId, table);
+      }
+
+      const table = standingsCache.get(match.competitionId) || [];
+      const standings = {
+        homeRank: findTeamRank(table, match.homeTeamId),
+        awayRank: findTeamRank(table, match.awayTeamId)
+      };
+
+      const homeStats = computeTeamRecentStats(homeRecent, match.homeTeamId);
+      const awayStats = computeTeamRecentStats(awayRecent, match.awayTeamId);
+      const h2h = computeH2H(h2hMatches, match.homeTeamId, match.awayTeamId);
+
+      const fallback = buildFallbackTip(match, homeStats, awayStats, h2h, standings);
+
+      enrichedMatches.push({
+        ...match,
+        derived: fallback
+      });
+    }
 
     let tips = [];
 
-    try {
-      const response = await client.responses.create({
-        model: OPENAI_MODEL,
-        input: prompt,
-        text: {
-          format: {
-            type: "json_schema",
-            name: "football_analysis",
-            strict: true,
-            schema: outputSchema
-          }
-        }
-      });
+    if (OPENAI_API_KEY && client) {
+      try {
+        const prompt = buildPrompt(payload, enrichedMatches);
 
-      const parsed = JSON.parse(response.output_text || '{"tips":[]}');
-      tips = Array.isArray(parsed.tips) ? parsed.tips.slice(0, payload.match_limit) : [];
-    } catch (aiError) {
-      console.error("AI analyze error:", aiError?.message || aiError);
+        const response = await client.responses.create({
+          model: OPENAI_MODEL,
+          input: prompt,
+          text: {
+            format: {
+              type: "json_schema",
+              name: "football_analysis",
+              strict: true,
+              schema: outputSchema
+            }
+          }
+        });
+
+        const parsed = JSON.parse(response.output_text || '{"tips":[]}');
+        tips = Array.isArray(parsed.tips) ? parsed.tips.slice(0, payload.match_limit) : [];
+      } catch (aiError) {
+        console.error("AI analyze error:", aiError?.message || aiError);
+      }
     }
 
     if (!tips.length) {
-      tips = buildFallbackTips(matches, payload.match_limit);
+      tips = enrichedMatches
+        .map((m) => m.derived)
+        .slice(0, payload.match_limit);
     }
 
-    res.json({ tips });
+    tips = tips.map((tip) => {
+      const riskMatch = enrichedMatches.find(
+        (m) => `${m.homeTeam} - ${m.awayTeam}` === tip.match
+      );
+      if (!riskMatch) return tip;
+
+      return {
+        ...tip,
+        risk_score: riskMatch.derived.risk_score,
+        confidenceScore: riskMatch.derived.confidenceScore
+      };
+    });
+
+    const coupons = computeCouponBuckets(tips);
+
+    res.json({ tips, coupons });
   } catch (error) {
     const message =
       error?.response?.data?.message ||
