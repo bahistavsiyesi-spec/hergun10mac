@@ -4,156 +4,117 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Bahis Asistanı Pro</title>
-
 <style>
-
 body{
-background:#0b0f1a;
-font-family:Arial;
-color:white;
-margin:0;
-padding:40px;
+  background:#0b0f1a;
+  font-family:Arial,sans-serif;
+  color:white;
+  margin:0;
+  padding:40px;
 }
-
 .container{
-max-width:1000px;
-margin:auto;
+  max-width:1000px;
+  margin:auto;
 }
-
 h1{
-color:#00ff87;
+  color:#00ff87;
 }
-
 button{
-background:#00ff87;
-border:none;
-padding:15px 30px;
-font-size:16px;
-border-radius:8px;
-cursor:pointer;
+  background:#00ff87;
+  border:none;
+  padding:15px 30px;
+  font-size:16px;
+  border-radius:8px;
+  cursor:pointer;
 }
-
 button:hover{
-opacity:0.9;
+  opacity:.9;
 }
-
 .panel{
-background:#111827;
-padding:20px;
-border-radius:10px;
-margin-top:20px;
+  background:#111827;
+  padding:20px;
+  border-radius:10px;
+  margin-top:20px;
 }
-
 #results{
-margin-top:30px;
+  margin-top:30px;
 }
-
 .card{
-background:#111827;
-padding:20px;
-border-radius:10px;
-margin-bottom:15px;
-border:1px solid #222;
+  background:#111827;
+  padding:20px;
+  border-radius:10px;
+  margin-bottom:15px;
+  border:1px solid #222;
 }
-
 .match{
-font-size:18px;
-font-weight:bold;
+  font-size:18px;
+  font-weight:bold;
 }
-
 .league{
-color:#aaa;
-font-size:14px;
+  color:#aaa;
+  font-size:14px;
 }
-
 .stat{
-margin-top:10px;
-font-size:14px;
+  margin-top:10px;
+  font-size:14px;
 }
-
 .reason{
-margin-top:10px;
-color:#ccc;
+  margin-top:10px;
+  color:#ccc;
 }
-
 </style>
 </head>
-
 <body>
-
 <div class="container">
+  <h1>⚽ Bahis Asistanı Pro</h1>
 
-<h1>⚽ Bahis Asistanı Pro</h1>
+  <div class="panel">
+    <button onclick="analiz()">Derin Analiz Başlat</button>
+  </div>
 
-<div class="panel">
-
-<button onclick="analiz()">Derin Analiz Başlat</button>
-
-</div>
-
-<div id="results"></div>
-
+  <div id="results"></div>
 </div>
 
 <script>
-
 async function analiz(){
+  document.getElementById("results").innerHTML = "Analiz yapılıyor...";
 
-document.getElementById("results").innerHTML="Analiz yapılıyor..."
+  const r = await fetch("https://hergun10mac.onrender.com/analyze", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      match_limit: 10
+    })
+  });
 
-let r = await fetch("https://hergun10mac.onrender.com/analyze",{
+  const data = await r.json();
+  let html = "";
 
-method:"POST",
+  if (!data.tips || data.tips.length === 0) {
+    document.getElementById("results").innerHTML = "Bugün uygun maç bulunamadı.";
+    return;
+  }
 
-headers:{
-"Content-Type":"application/json"
-},
+  data.tips.forEach(t => {
+    html += `
+      <div class="card">
+        <div class="match">${t.match}</div>
+        <div class="league">${t.league} - ${t.time}</div>
+        <div class="stat">Tahmin: ${t.result_prediction}</div>
+        <div class="stat">Skor: ${t.score_prediction}</div>
+        <div class="stat">2.5 Üst: %${t.prob_over25}</div>
+        <div class="stat">İlk Yarı 2+ Gol: %${t.prob_first_half_2plus}</div>
+        <div class="stat">KG Var: %${t.prob_btts}</div>
+        <div class="stat">Güven: ${t.confidence}</div>
+        <div class="reason">${Array.isArray(t.reasons) ? t.reasons.join("<br>") : ""}</div>
+      </div>
+    `;
+  });
 
-body:JSON.stringify({
-match_limit:10
-})
-
-})
-
-let data = await r.json()
-
-let html=""
-
-if(!data.tips || data.tips.length==0){
-
-document.getElementById("results").innerHTML="Bugün uygun maç bulunamadı."
-
-return
-
+  document.getElementById("results").innerHTML = html;
 }
-
-data.tips.forEach(t=>{
-
-html+=`
-<div class="card">
-
-<div class="match">${t.match}</div>
-<div class="league">${t.league} - ${t.time}</div>
-
-<div class="stat">Tahmin: ${t.result_prediction}</div>
-<div class="stat">Skor: ${t.score_prediction}</div>
-<div class="stat">2.5 Üst: %${t.prob_over25}</div>
-<div class="stat">İlk Yarı 2+ Gol: %${t.prob_first_half_2plus}</div>
-<div class="stat">KG Var: %${t.prob_btts}</div>
-<div class="stat">Güven: ${t.confidence}</div>
-
-<div class="reason">${t.reasons.join("<br>")}</div>
-
-</div>
-`
-
-})
-
-document.getElementById("results").innerHTML=html
-
-}
-
 </script>
-
 </body>
 </html>
