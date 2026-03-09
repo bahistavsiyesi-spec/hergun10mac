@@ -66,13 +66,10 @@ const CACHE_TTL = {
 };
 
 const MIN_CACHE_MATCHES = Number(process.env.MIN_CACHE_MATCHES || 8);
+const FOOTBALL_DATA_CONCURRENCY = Number(process.env.FOOTBALL_DATA_CONCURRENCY || 3);
 
 const CACHE = {
-  fixture: {
-    key: "",
-    expiresAt: 0,
-    data: []
-  },
+  fixture: new Map(),
   standings: new Map(),
   teamMatches: new Map(),
   h2h: new Map()
@@ -92,6 +89,11 @@ function clamp(n, min, max) {
 
 function round2(n) {
   return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+function safeNum(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
 }
 
 function getTRDateParts(date = new Date()) {
@@ -710,72 +712,97 @@ function mergeTwoMatches(existing, incoming) {
   const existingIsFD = isFootballDataLike(existing);
   const incomingIsFD = isFootballDataLike(incoming);
 
-  const preferredBase =
-    incomingIsFD && !existingIsFD ? incoming : existing;
+  const homeTeam = existing.homeTeam || incoming.homeTeam;
+  const awayTeam = existing.awayTeam || incoming.awayTeam;
+  const match = existing.match || incoming.match || `${homeTeam} vs ${awayTeam}`;
+  const utcDate = existing.utcDate || incoming.utcDate;
+  const trDate = existing.trDate || incoming.trDate;
+  const time = existing.time || incoming.time;
 
-  const secondary =
-    preferredBase === existing ? incoming : existing;
-
-  const merged = {
-    ...preferredBase,
-    ...secondary
-  };
-
-  merged.id = preferredBase.id || secondary.id;
-  merged.match = preferredBase.match || secondary.match;
-  merged.homeTeam = preferredBase.homeTeam || secondary.homeTeam;
-  merged.awayTeam = preferredBase.awayTeam || secondary.awayTeam;
-  merged.utcDate = preferredBase.utcDate || secondary.utcDate;
-  merged.trDate = preferredBase.trDate || secondary.trDate;
-  merged.time = preferredBase.time || secondary.time;
-  merged.status = preferredBase.status || secondary.status;
-  merged.stage = preferredBase.stage || secondary.stage || "Normal";
-  merged.country = preferredBase.country || secondary.country || "";
-  merged.league = preferredBase.league || secondary.league || "Unknown League";
-
-  merged.rawMatchId =
+  const rawMatchId =
     (incomingIsFD ? incoming.rawMatchId : null) ||
     (existingIsFD ? existing.rawMatchId : null) ||
-    preferredBase.rawMatchId ||
-    secondary.rawMatchId ||
+    existing.rawMatchId ||
+    incoming.rawMatchId ||
     null;
 
-  merged.homeTeamId =
+  const homeTeamId =
     (incomingIsFD ? incoming.homeTeamId : null) ||
     (existingIsFD ? existing.homeTeamId : null) ||
-    preferredBase.homeTeamId ||
-    secondary.homeTeamId ||
+    existing.homeTeamId ||
+    incoming.homeTeamId ||
     null;
 
-  merged.awayTeamId =
+  const awayTeamId =
     (incomingIsFD ? incoming.awayTeamId : null) ||
     (existingIsFD ? existing.awayTeamId : null) ||
-    preferredBase.awayTeamId ||
-    secondary.awayTeamId ||
+    existing.awayTeamId ||
+    incoming.awayTeamId ||
     null;
 
-  merged.competitionCode =
+  const competitionCode =
     (incomingIsFD ? incoming.competitionCode : "") ||
     (existingIsFD ? existing.competitionCode : "") ||
-    preferredBase.competitionCode ||
-    secondary.competitionCode ||
-    slugifyCompetitionCode(merged.league, merged.country);
+    existing.competitionCode ||
+    incoming.competitionCode ||
+    slugifyCompetitionCode(existing.league || incoming.league, existing.country || incoming.country);
 
-  merged.competitionId =
+  const competitionId =
     (incomingIsFD ? incoming.competitionId : null) ||
     (existingIsFD ? existing.competitionId : null) ||
-    preferredBase.competitionId ||
-    secondary.competitionId ||
+    existing.competitionId ||
+    incoming.competitionId ||
     null;
 
-  merged.provider =
-    merged.rawMatchId && merged.homeTeamId && merged.awayTeamId
-      ? "football-data+rapidapi"
-      : (incomingIsFD || existingIsFD)
-      ? "football-data-partial"
-      : preferredBase.provider || secondary.provider || "unknown";
+  const league =
+    (incomingIsFD ? incoming.league : "") ||
+    (existingIsFD ? existing.league : "") ||
+    existing.league ||
+    incoming.league ||
+    "Unknown League";
 
-  return merged;
+  const country =
+    (incomingIsFD ? incoming.country : "") ||
+    (existingIsFD ? existing.country : "") ||
+    existing.country ||
+    incoming.country ||
+    "";
+
+  const status = existing.status || incoming.status || "SCHEDULED";
+  const stage = existing.stage || incoming.stage || "Normal";
+
+  const provider =
+    rawMatchId && homeTeamId && awayTeamId
+      ? "football-data+rapidapi"
+      : incomingIsFD || existingIsFD
+      ? "football-data-partial"
+      : existing.provider || incoming.provider || "unknown";
+
+  const id =
+    (incomingIsFD ? incoming.id : null) ||
+    (existingIsFD ? existing.id : null) ||
+    existing.id ||
+    incoming.id;
+
+  return {
+    id,
+    rawMatchId,
+    provider,
+    match,
+    homeTeam,
+    awayTeam,
+    homeTeamId,
+    awayTeamId,
+    league,
+    country,
+    competitionCode,
+    competitionId,
+    utcDate,
+    trDate,
+    time,
+    status,
+    stage
+  };
 }
 
 function mergeMatchSources(primary, secondary) {
@@ -789,8 +816,7 @@ function mergeMatchSources(primary, secondary) {
       continue;
     }
 
-    const existing = map.get(key);
-    map.set(key, mergeTwoMatches(existing, m));
+    map.set(key, mergeTwoMatches(map.get(key), m));
   }
 
   return sortMatches([...map.values()]);
@@ -843,18 +869,28 @@ async function fetchCompetitionMatches(code, dateFrom, dateTo) {
   }
 }
 
+async function runBatches(items, worker, batchSize = 3) {
+  const out = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const chunk = items.slice(i, i + batchSize);
+    const results = await Promise.all(chunk.map((item) => worker(item)));
+    out.push(...results);
+  }
+  return out;
+}
+
 async function fetchMatchesForDateRangeFromFootballDataCompetitions(dateFrom, dateTo) {
   if (!FOOTBALL_DATA_API_KEY) {
     throw new Error("FOOTBALL_DATA_API_KEY tanimli degil");
   }
 
-  const all = [];
+  const results = await runBatches(
+    DEFAULT_COMPETITION_CODES,
+    async (code) => fetchCompetitionMatches(code, dateFrom, dateTo),
+    FOOTBALL_DATA_CONCURRENCY
+  );
 
-  for (const code of DEFAULT_COMPETITION_CODES) {
-    const matches = await fetchCompetitionMatches(code, dateFrom, dateTo);
-    all.push(...matches);
-  }
-
+  const all = results.flat();
   const finalMatches = dedupeMatches(sortMatches(all));
   console.log("Competition aggregate final match count:", finalMatches.length);
 
@@ -864,42 +900,21 @@ async function fetchMatchesForDateRangeFromFootballDataCompetitions(dateFrom, da
   };
 }
 
-async function getMatchesWithCache(
-  dateFrom,
-  dateTo,
-  options = {}
-) {
+async function getMatchesWithCache(dateFrom, dateTo, options = {}) {
   const { forceRefresh = false, minNeeded = MIN_CACHE_MATCHES } = options;
   const cacheKey = `range_${dateFrom}_${dateTo}`;
 
-  if (
-    !forceRefresh &&
-    CACHE.fixture.key === cacheKey &&
-    CACHE.fixture.expiresAt > nowTs() &&
-    Array.isArray(CACHE.fixture.data) &&
-    CACHE.fixture.data.length >= minNeeded
-  ) {
-    console.log("Fixture cache hit:", CACHE.fixture.data.length);
+  const cached = cacheGet(CACHE.fixture, cacheKey);
+  if (!forceRefresh && Array.isArray(cached) && cached.length >= minNeeded) {
+    console.log("Fixture cache hit:", cached.length);
     return {
       provider: "cache",
-      matches: CACHE.fixture.data
+      matches: cached
     };
   }
 
-  if (
-    !forceRefresh &&
-    CACHE.fixture.key === cacheKey &&
-    CACHE.fixture.expiresAt > nowTs() &&
-    Array.isArray(CACHE.fixture.data) &&
-    CACHE.fixture.data.length > 0 &&
-    CACHE.fixture.data.length < minNeeded
-  ) {
-    console.log(
-      "Fixture cache bypassed due to low count:",
-      CACHE.fixture.data.length,
-      "minNeeded:",
-      minNeeded
-    );
+  if (!forceRefresh && Array.isArray(cached) && cached.length > 0 && cached.length < minNeeded) {
+    console.log("Fixture cache bypassed due to low count:", cached.length, "minNeeded:", minNeeded);
   } else {
     console.log("Fixture cache miss, fetching RapidAPI + football-data...");
   }
@@ -930,14 +945,9 @@ async function getMatchesWithCache(
   else if (footballResult.matches.length) provider = "football-data-competitions";
 
   if (Array.isArray(merged) && merged.length > 0) {
-    CACHE.fixture.key = cacheKey;
-    CACHE.fixture.expiresAt = nowTs() + CACHE_TTL.fixtureMs;
-    CACHE.fixture.data = merged;
+    cacheSet(CACHE.fixture, cacheKey, merged, CACHE_TTL.fixtureMs);
     console.log("Fixture cache updated with matches:", merged.length);
   } else {
-    CACHE.fixture.key = "";
-    CACHE.fixture.expiresAt = 0;
-    CACHE.fixture.data = [];
     console.log("No matches found, empty result NOT cached.");
   }
 
@@ -1304,22 +1314,22 @@ function buildStrengthScore(side, opponent) {
 
   let score = 50;
 
-  score += (Number(recent.formScore || 0) - 50) * 0.35;
-  score += (Number(recent.goalsForAvg || 0) - Number(recent.goalsAgainstAvg || 0)) * 8;
-  score += (Number(recent.over25Rate || 0) - 50) * 0.06;
-  score += (Number(recent.bttsRate || 0) - 50) * 0.03;
-  score += (Number(standingForm.formScore5 || 0) - 50) * 0.15;
+  score += (safeNum(recent.formScore) - 50) * 0.35;
+  score += (safeNum(recent.goalsForAvg) - safeNum(recent.goalsAgainstAvg)) * 8;
+  score += (safeNum(recent.over25Rate) - 50) * 0.06;
+  score += (safeNum(recent.bttsRate) - 50) * 0.03;
+  score += (safeNum(standingForm.formScore5) - 50) * 0.15;
 
   if (standing.position && oppStanding.position) {
-    const posEdge = Number(oppStanding.position) - Number(standing.position);
+    const posEdge = safeNum(oppStanding.position) - safeNum(standing.position);
     score += posEdge * 1.8;
   }
 
   if (standing.points != null && oppStanding.points != null) {
-    score += (Number(standing.points) - Number(oppStanding.points)) * 0.12;
+    score += (safeNum(standing.points) - safeNum(oppStanding.points)) * 0.12;
   }
 
-  score -= (Number(oppRecent.formScore || 0) - 50) * 0.18;
+  score -= (safeNum(oppRecent.formScore) - 50) * 0.18;
 
   return round2(clamp(score, 1, 99));
 }
@@ -1356,6 +1366,11 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
   const h2h = match?.enriched?.h2h || {};
   const enrichmentLevel = match?.enriched?.enrichmentLevel || "limited";
 
+  const h2hHomeWins = safeNum(h2h?.homeWins, 0);
+  const h2hAwayWins = safeNum(h2h?.awayWins, 0);
+  const h2hMatches = safeNum(h2h?.matches, 0);
+  const h2hSummaryBase = cleanText(h2h?.summary || "");
+
   const homeStrength = buildStrengthScore(home, away);
   const awayStrength = buildStrengthScore(away, home);
   const gap = round2(homeStrength - awayStrength);
@@ -1366,15 +1381,15 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
   else if (gap <= -8) resultPrediction = "2";
 
   const combinedGoalBase =
-    (Number(home?.recent?.goalsForAvg || 0) + Number(away?.recent?.goalsForAvg || 0)) * 17 +
-    (Number(home?.recent?.goalsAgainstAvg || 0) + Number(away?.recent?.goalsAgainstAvg || 0)) * 8;
+    (safeNum(home?.recent?.goalsForAvg) + safeNum(away?.recent?.goalsForAvg)) * 17 +
+    (safeNum(home?.recent?.goalsAgainstAvg) + safeNum(away?.recent?.goalsAgainstAvg)) * 8;
 
   let over25Lean = clamp(
     Math.round(
       combinedGoalBase * 0.9 +
-      Number(home?.recent?.over25Rate || 0) * 0.30 +
-      Number(away?.recent?.over25Rate || 0) * 0.30 +
-      Number(h2h?.over25Rate || 0) * 0.24 -
+      safeNum(home?.recent?.over25Rate) * 0.30 +
+      safeNum(away?.recent?.over25Rate) * 0.30 +
+      safeNum(h2h?.over25Rate) * 0.24 -
       28
     ),
     10,
@@ -1383,9 +1398,9 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
 
   let bttsLean = clamp(
     Math.round(
-      Number(home?.recent?.bttsRate || 0) * 0.40 +
-      Number(away?.recent?.bttsRate || 0) * 0.40 +
-      Number(h2h?.bttsRate || 0) * 0.20
+      safeNum(home?.recent?.bttsRate) * 0.40 +
+      safeNum(away?.recent?.bttsRate) * 0.40 +
+      safeNum(h2h?.bttsRate) * 0.20
     ),
     8,
     90
@@ -1393,41 +1408,35 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
 
   let firstHalf2PlusLean = clamp(
     Math.round(
-      Number(home?.recent?.firstHalf2PlusRate || 0) * 0.42 +
-      Number(away?.recent?.firstHalf2PlusRate || 0) * 0.42 +
-      Number(h2h?.firstHalf2PlusRate || 0) * 0.16
+      safeNum(home?.recent?.firstHalf2PlusRate) * 0.42 +
+      safeNum(away?.recent?.firstHalf2PlusRate) * 0.42 +
+      safeNum(h2h?.firstHalf2PlusRate) * 0.16
     ),
     5,
     78
   );
 
   if (enrichmentLevel !== "full") {
-    over25Lean = clamp(Math.round((over25Lean * 0.55) + 20), 12, 68);
-    bttsLean = clamp(Math.round((bttsLean * 0.55) + 18), 10, 65);
-    firstHalf2PlusLean = clamp(Math.round((firstHalf2PlusLean * 0.50) + 10), 5, 45);
+    over25Lean = clamp(Math.round(over25Lean * 0.55 + 20), 12, 68);
+    bttsLean = clamp(Math.round(bttsLean * 0.55 + 18), 10, 65);
+    firstHalf2PlusLean = clamp(Math.round(firstHalf2PlusLean * 0.50 + 10), 5, 45);
   }
 
   const homeLean = clamp(
-    Math.round(
-      50 + gap * 2.2 +
-      (h2h.homeWins - h2h.awayWins) * 2
-    ),
+    Math.round(50 + gap * 2.2 + (h2hHomeWins - h2hAwayWins) * 2),
     5,
     90
   );
 
   const awayLean = clamp(
-    Math.round(
-      50 + (awayStrength - homeStrength) * 2.2 +
-      (h2h.awayWins - h2h.homeWins) * 2
-    ),
+    Math.round(50 + (awayStrength - homeStrength) * 2.2 + (h2hAwayWins - h2hHomeWins) * 2),
     5,
     90
   );
 
   const volatility =
-    Math.abs(Number(home?.recent?.goalsForAvg || 0) - Number(home?.recent?.goalsAgainstAvg || 0)) * 4 +
-    Math.abs(Number(away?.recent?.goalsForAvg || 0) - Number(away?.recent?.goalsAgainstAvg || 0)) * 4 +
+    Math.abs(safeNum(home?.recent?.goalsForAvg) - safeNum(home?.recent?.goalsAgainstAvg)) * 4 +
+    Math.abs(safeNum(away?.recent?.goalsForAvg) - safeNum(away?.recent?.goalsAgainstAvg)) * 4 +
     Math.abs(50 - bttsLean) * 0.12 +
     Math.abs(50 - over25Lean) * 0.10 +
     (enrichmentLevel === "full" ? 0 : 10);
@@ -1455,6 +1464,7 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
   let tableContext = "Lig siralamasi dengeli gorunuyor.";
   const homePos = home?.standing?.position;
   const awayPos = away?.standing?.position;
+
   if (homePos && awayPos) {
     if (homePos + 4 <= awayPos) {
       tableContext = "Ev sahibi lig siralamasi ve puan tablosunda daha avantajli.";
@@ -1469,7 +1479,7 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
 
   const h2hSummary =
     enrichmentLevel === "full"
-      ? h2h?.summary || "Yeterli H2H verisi yok."
+      ? h2hSummaryBase || "Yeterli H2H verisi yok."
       : `${match.homeTeam} - ${match.awayTeam} icin detayli H2H verisi sinirli.`;
 
   const reasons = [
@@ -1478,7 +1488,7 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
     extraPrompt
       ? `Ek not dikkate alindi: ${cleanText(extraPrompt).slice(0, 110)}`
       : enrichmentLevel === "full"
-      ? `H2H ozeti: ${h2hSummary}`
+      ? `H2H ozeti: ${h2hSummary}${h2hMatches ? ` Son ${h2hMatches} mac baz alindi.` : ""}`
       : `Mac profili: ${match.league} / ${match.country || "Bilinmeyen ulke"} verisiyle dusuk-guven analizi.`
   ];
 
@@ -1502,10 +1512,10 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
     h2h_summary: h2hSummary,
     home_form: home?.recent?.form10 || home?.standingForm?.form10 || "",
     away_form: away?.recent?.form10 || away?.standingForm?.form10 || "",
-    home_goals_avg: home?.recent?.goalsForAvg ?? 0,
-    home_conceded_avg: home?.recent?.goalsAgainstAvg ?? 0,
-    away_goals_avg: away?.recent?.goalsForAvg ?? 0,
-    away_conceded_avg: away?.recent?.goalsAgainstAvg ?? 0,
+    home_goals_avg: safeNum(home?.recent?.goalsForAvg),
+    home_conceded_avg: safeNum(home?.recent?.goalsAgainstAvg),
+    away_goals_avg: safeNum(away?.recent?.goalsForAvg),
+    away_conceded_avg: safeNum(away?.recent?.goalsAgainstAvg),
     home_performance:
       homeStrength >= 72 ? "Cok guclu" :
       homeStrength >= 61 ? "Iyi" :
@@ -1525,7 +1535,7 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
         points: home?.standing?.points ?? null,
         form5: home?.recent?.form5 || home?.standingForm?.form5 || "",
         form10: home?.recent?.form10 || home?.standingForm?.form10 || "",
-        formScore: home?.recent?.formScore ?? home?.standingForm?.formScore10 ?? 0
+        formScore: safeNum(home?.recent?.formScore ?? home?.standingForm?.formScore10, 0)
       },
       away: {
         teamId: match.awayTeamId,
@@ -1533,25 +1543,48 @@ function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
         points: away?.standing?.points ?? null,
         form5: away?.recent?.form5 || away?.standingForm?.form5 || "",
         form10: away?.recent?.form10 || away?.standingForm?.form10 || "",
-        formScore: away?.recent?.formScore ?? away?.standingForm?.formScore10 ?? 0
+        formScore: safeNum(away?.recent?.formScore ?? away?.standingForm?.formScore10, 0)
       },
       h2h: {
-        matches: h2h.matches || 0,
-        homeWins: h2h.homeWins || 0,
-        draws: h2h.draws || 0,
-        awayWins: h2h.awayWins || 0,
-        avgGoals: h2h.avgGoals || 0,
-        over25Rate: h2h.over25Rate || 0,
-        bttsRate: h2h.bttsRate || 0
+        matches: h2hMatches,
+        homeWins: h2hHomeWins,
+        draws: safeNum(h2h?.draws, 0),
+        awayWins: h2hAwayWins,
+        avgGoals: safeNum(h2h?.avgGoals, 0),
+        over25Rate: safeNum(h2h?.over25Rate, 0),
+        bttsRate: safeNum(h2h?.bttsRate, 0)
       }
     }
   };
 }
 
 async function improveTipsWithOpenAI(tips, extraPrompt = "") {
-  if (!openai) {
+  if (!openai || !Array.isArray(tips) || !tips.length) {
     return { tips, source: "fallback-realdata" };
   }
+
+  const compactTips = tips.map((tip) => ({
+    match_id: tip.match_id,
+    raw_match_id: tip.raw_match_id,
+    match: tip.match,
+    league: tip.league,
+    time: tip.time,
+    confidence: tip.confidence,
+    risk_note: tip.risk_note,
+    result_prediction: tip.result_prediction,
+    score_prediction: tip.score_prediction,
+    prob_over25: tip.prob_over25,
+    prob_first_half_2plus: tip.prob_first_half_2plus,
+    prob_btts: tip.prob_btts,
+    home_lean: tip.home_lean,
+    away_lean: tip.away_lean,
+    recommended_bet: tip.recommended_bet,
+    h2h_summary: tip.h2h_summary,
+    table_context: tip.table_context,
+    reasons: tip.reasons,
+    source_match: tip.source_match,
+    real_data: tip.real_data
+  }));
 
   const prompt = `
 Sen profesyonel futbol analiz asistanisin.
@@ -1568,16 +1601,18 @@ Kurallar:
 - Gercek sayisal verileri bozma
 - match, match_id, raw_match_id, league, time, source_match, real_data alanlarini degistirme
 - Her macin metni farkli olsun, ayni sablonu tekrar etme
+- Tips sayisini koru, eksiltme yapma
 - Ek istek: ${extraPrompt || "yok"}
 
 Veri:
-${JSON.stringify(tips, null, 2)}
+${JSON.stringify(compactTips, null, 2)}
 `;
 
   try {
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.45,
+      max_tokens: 3500,
       messages: [
         { role: "system", content: "Return only valid JSON." },
         { role: "user", content: prompt }
@@ -1593,23 +1628,26 @@ ${JSON.stringify(tips, null, 2)}
 
     const parsed = JSON.parse(cleaned);
 
-    if (parsed && Array.isArray(parsed.tips)) {
-      const safeTips = parsed.tips.map((tip, i) => ({
-        ...tips[i],
-        ...tip,
-        match: tips[i].match,
-        match_id: tips[i].match_id,
-        raw_match_id: tips[i].raw_match_id,
-        league: tips[i].league,
-        time: tips[i].time,
-        source_match: tips[i].source_match,
-        real_data: tips[i].real_data
-      }));
-
-      return { tips: safeTips, source: "openai" };
+    if (!parsed || !Array.isArray(parsed.tips)) {
+      return { tips, source: "fallback-openai-parse" };
     }
 
-    return { tips, source: "fallback-openai-parse" };
+    const safeTips = tips.map((baseTip, i) => {
+      const aiTip = parsed.tips?.[i] && typeof parsed.tips[i] === "object" ? parsed.tips[i] : {};
+      return {
+        ...baseTip,
+        ...aiTip,
+        match: baseTip.match,
+        match_id: baseTip.match_id,
+        raw_match_id: baseTip.raw_match_id,
+        league: baseTip.league,
+        time: baseTip.time,
+        source_match: baseTip.source_match,
+        real_data: baseTip.real_data
+      };
+    });
+
+    return { tips: safeTips, source: "openai" };
   } catch (error) {
     console.error("OpenAI fallback devrede:", error?.message || error);
     return { tips, source: "fallback-openai-error" };
@@ -1619,10 +1657,10 @@ ${JSON.stringify(tips, null, 2)}
 function sortByStrength(tips) {
   const scoreTip = (tip) => {
     let score = 0;
-    score += Number(tip.prob_over25 || 0) * 0.18;
-    score += Number(tip.prob_btts || 0) * 0.11;
-    score += Number(tip.prob_first_half_2plus || 0) * 0.07;
-    score += Math.max(Number(tip.home_lean || 0), Number(tip.away_lean || 0)) * 0.18;
+    score += safeNum(tip.prob_over25) * 0.18;
+    score += safeNum(tip.prob_btts) * 0.11;
+    score += safeNum(tip.prob_first_half_2plus) * 0.07;
+    score += Math.max(safeNum(tip.home_lean), safeNum(tip.away_lean)) * 0.18;
 
     const conf = String(tip.confidence || "").toLowerCase();
     if (conf.includes("cok yuksek")) score += 35;
@@ -1654,9 +1692,9 @@ function buildCoupons(tips) {
   const balanced = sorted.slice(1, 4).map((tip) => ({
     match: tip.match,
     bet:
-      Number(tip.prob_over25 || 0) >= 66
+      safeNum(tip.prob_over25) >= 66
         ? "2.5 Ust"
-        : Number(tip.prob_btts || 0) >= 62
+        : safeNum(tip.prob_btts) >= 62
         ? "KG Var"
         : tip.recommended_bet,
     confidence: tip.confidence,
@@ -1708,12 +1746,14 @@ app.get("/health", (req, res) => {
     rapidApiCustomPath: RAPIDAPI_MATCHES_BY_DATE_PATH || null,
     cacheActive: true,
     minCacheMatches: MIN_CACHE_MATCHES,
+    footballDataConcurrency: FOOTBALL_DATA_CONCURRENCY,
     competitions: DEFAULT_COMPETITION_CODES,
     cacheInfo: {
       fixtureTtlMinutes: CACHE_TTL.fixtureMs / 60000,
       standingsTtlMinutes: CACHE_TTL.standingsMs / 60000,
       teamMatchesTtlMinutes: CACHE_TTL.teamMatchesMs / 60000,
-      h2hTtlMinutes: CACHE_TTL.h2hMs / 60000
+      h2hTtlMinutes: CACHE_TTL.h2hMs / 60000,
+      fixtureCacheEntries: CACHE.fixture.size
     }
   });
 });
@@ -1727,7 +1767,7 @@ app.get("/today-matches", async (req, res) => {
       .filter(Boolean);
 
     const match_limit = Math.max(1, Math.min(Number(req.query.match_limit) || 40, 150));
-    const day_offset = clamp(Number(req.query.day_offset) || 0, 0, 2);
+    const day_offset = clamp(Number(req.query.day_offset) || 0, -1, 2);
     const force_refresh = String(req.query.force_refresh || "0") === "1";
 
     const dateFrom = getDateShiftedYmd(day_offset);
@@ -1770,7 +1810,10 @@ app.get("/match-details/:id", async (req, res) => {
       });
     }
 
-    const allMatchesResult = await getMatchesWithCache(getDateShiftedYmd(0), getDateShiftedYmd(0), {
+    const day_offset = clamp(Number(req.query.day_offset) || 0, -1, 2);
+    const dateYmd = getDateShiftedYmd(day_offset);
+
+    const allMatchesResult = await getMatchesWithCache(dateYmd, dateYmd, {
       forceRefresh: String(req.query.force_refresh || "0") === "1",
       minNeeded: MIN_CACHE_MATCHES
     });
@@ -1812,7 +1855,7 @@ app.post("/analyze", async (req, res) => {
       force_refresh = false
     } = req.body || {};
 
-    const safeDayOffset = clamp(Number(day_offset) || 0, 0, 2);
+    const safeDayOffset = clamp(Number(day_offset) || 0, -1, 2);
     const dateFrom = getDateShiftedYmd(safeDayOffset);
     const dateTo = dateFrom;
 
