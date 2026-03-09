@@ -206,7 +206,8 @@
     .btn:disabled{opacity:.6; cursor:not-allowed; transform:none}
 
     .status-box,
-    .error-box{
+    .error-box,
+    .info-box{
       display:none;
       border-radius:16px;
       padding:16px 18px;
@@ -225,6 +226,13 @@
       background:rgba(255,92,116,.08);
       border-color:rgba(255,92,116,.22);
       color:#ffd7de;
+    }
+
+    .info-box.active{
+      display:block;
+      background:rgba(79,195,247,.08);
+      border-color:rgba(79,195,247,.2);
+      color:#dff4ff;
     }
 
     .loading-steps{
@@ -555,7 +563,7 @@
         <div class="brand-icon">⚽</div>
         <div>
           <h1>Bahis Asistanı Pro</h1>
-          <p>Gerçek form verisi · AI risk skoru · otomatik kupon</p>
+          <p>Gerçek form verisi · risk skoru · otomatik kupon · geniş maç havuzu</p>
         </div>
       </div>
 
@@ -579,7 +587,7 @@
           <div class="field">
             <label>Backend endpoint</label>
             <input id="apiUrl" value="https://hergun10mac.onrender.com/analyze" />
-            <div class="help">Bu alan hazır geliyor. İstersen backend adresini sonradan değiştirebilirsin.</div>
+            <div class="help">Endpoint hazır geliyor. Backend maçları çekip form ve risk hesaplarıyla analiz üretir.</div>
           </div>
 
           <div class="field">
@@ -593,7 +601,7 @@
             <div class="field">
               <label>Lig filtresi</label>
               <select id="leagueMode">
-                <option value="all">Tüm ligler</option>
+                <option value="all" selected>Tüm ligler</option>
                 <option value="major">Büyük ligler</option>
                 <option value="custom">Özel lig</option>
               </select>
@@ -606,6 +614,9 @@
                 <option value="8">8</option>
                 <option value="10" selected>10</option>
                 <option value="12">12</option>
+                <option value="15">15</option>
+                <option value="20">20</option>
+                <option value="25">25</option>
               </select>
             </div>
           </div>
@@ -621,7 +632,7 @@
           </div>
 
           <div class="footer-note">
-            Sistem önce backend verisini toplar, sonra AI destekli analiz üretir. AI boş dönerse güvenli yedek analiz gösterilir.
+            OpenAI kotası biterse sistem yine çalışır; backend fallback analiz üretir. Maç sayısını artıran şey AI değil, backend’in geniş havuz işlemesidir.
           </div>
         </div>
       </div>
@@ -633,12 +644,13 @@
         <li id="s1">Günün maçları çekiliyor</li>
         <li id="s2">Takım form verileri işleniyor</li>
         <li id="s3">H2H ve risk hesapları hazırlanıyor</li>
-        <li id="s4">AI değerlendirmesi yapılıyor</li>
+        <li id="s4">AI / fallback değerlendirmesi yapılıyor</li>
         <li id="s5">Kuponlar ve kartlar oluşturuluyor</li>
       </ul>
     </div>
 
     <div class="error-box" id="errorBox"></div>
+    <div class="info-box" id="infoBox"></div>
 
     <div class="grid">
       <section class="panel">
@@ -682,6 +694,7 @@
     const scrollCouponBtn = document.getElementById("scrollCouponBtn");
     const statusBox = document.getElementById("statusBox");
     const errorBox = document.getElementById("errorBox");
+    const infoBox = document.getElementById("infoBox");
     const tipsList = document.getElementById("tipsList");
     const countPill = document.getElementById("countPill");
     const todayLabel = document.getElementById("todayLabel");
@@ -911,7 +924,9 @@
     async function analyze() {
       analyzeBtn.disabled = true;
       errorBox.classList.remove("active");
+      infoBox.classList.remove("active");
       errorBox.textContent = "";
+      infoBox.textContent = "";
       statusBox.classList.add("active");
       resetSteps();
       playSteps();
@@ -941,6 +956,13 @@
           statusBox.classList.remove("active");
           renderTips(data.tips || []);
           renderCoupons(data.coupons || {});
+
+          if (typeof data.total_matches_found !== "undefined" || typeof data.analyzed_matches !== "undefined") {
+            const total = data.total_matches_found ?? 0;
+            const analyzed = data.analyzed_matches ?? 0;
+            infoBox.textContent = `Toplam bulunan maç: ${total} | Detay analiz yapılan maç: ${analyzed}`;
+            infoBox.classList.add("active");
+          }
         }, 400);
 
       } catch (err) {
