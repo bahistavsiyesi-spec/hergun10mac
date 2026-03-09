@@ -1,92 +1,64 @@
-<!DOCTYPE html>
-<html lang="tr">
+async function getFixturesForDate(dateStr, leagueMode, customLeagues) {
+  const season = seasonFromDate(dateStr);
+  const selected = leagueMode === "custom"
+    ? Object.entries(LEAGUES).filter(([name]) => customLeagues.includes(name))
+    : Object.entries(LEAGUES);
 
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Bahis Analiz Motoru</title>
+  const all = [];
+  for (const [leagueName, info] of selected) {
+    const items = await apiFootballGet("/fixtures", {
+      league: info.id,
+      season,
+      date: dateStr,
+      timezone: "Europe/Istanbul"
+    });
 
-<style>
-
-body{
-font-family: Arial;
-background:#0b0f1a;
-color:white;
-text-align:center;
-padding:40px;
+    for (const f of items) {
+      if (f?.fixture?.status?.short && ["PST", "CANC", "ABD"].includes(f.fixture.status.short)) continue;
+      all.push({
+        fixtureId: f.fixture.id,
+        leagueName,
+        leagueId: info.id,
+        season,
+        date: dateStr,
+        time: new Date(f.fixture.date).toLocaleTimeString("tr-TR", {
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZone: "Europe/Istanbul"
+        }),
+        homeTeam: {
+          id: f.teams.home.id,
+          name: f.teams.home.name
+        },
+        awayTeam: {
+          id: f.teams.away.id,
+          name: f.teams.away.name
+        }
+      });
+    }
+  }
+  return all;
 }
 
-button{
-background:#00ff87;
-color:black;
-border:none;
-padding:15px 30px;
-font-size:18px;
-cursor:pointer;
-border-radius:10px;
+function addDays(dateStr, days) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
-button:hover{
-opacity:0.8;
+async function getDailyFixtures(dateStr, leagueMode, customLeagues) {
+  const tryDates = [
+    dateStr,
+    addDays(dateStr, 1),
+    addDays(dateStr, -1),
+    addDays(dateStr, 2),
+    addDays(dateStr, 3)
+  ];
+
+  for (const d of tryDates) {
+    const fixtures = await getFixturesForDate(d, leagueMode, customLeagues);
+    if (fixtures.length) return fixtures;
+  }
+
+  return [];
 }
-
-#sonuc{
-margin-top:40px;
-text-align:left;
-background:#111827;
-padding:20px;
-border-radius:10px;
-white-space:pre-wrap;
-}
-
-</style>
-</head>
-
-<body>
-
-<h1>⚽ Bahis Analiz Motoru</h1>
-
-<p>AI + İstatistik + H2H Analizi</p>
-
-<button onclick="analiz()">Derin Analiz Başlat</button>
-
-<div id="sonuc">Sonuç burada görünecek...</div>
-
-<script>
-
-async function analiz(){
-
-document.getElementById("sonuc").innerText="Analiz yapılıyor..."
-
-let r = await fetch("https://hergun10mac.onrender.com/analyze",{
-
-method:"POST",
-
-headers:{
-"Content-Type":"application/json"
-},
-
-body:JSON.stringify({
-match_limit:10
-})
-
-})
-
-let data = await r.json()
-
-if(data.tips.length==0){
-
-document.getElementById("sonuc").innerText="Bugün uygun maç bulunamadı."
-
-return
-}
-
-document.getElementById("sonuc").innerText=
-JSON.stringify(data,null,2)
-
-}
-
-</script>
-
-</body>
-</html>
