@@ -15,6 +15,11 @@ const FOOTBALL_DATA_API_KEY = process.env.FOOTBALL_DATA_API_KEY || "";
 
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
+/**
+ * Not:
+ * football-data planina gore bazi ligler farkli olabilir.
+ * Erisimi olmayan lig hata verirse sessizce atlanir.
+ */
 const DEFAULT_COMPETITION_CODES = [
   "PL",   // Premier League
   "PD",   // La Liga
@@ -23,10 +28,12 @@ const DEFAULT_COMPETITION_CODES = [
   "FL1",  // Ligue 1
   "PPL",  // Primeira Liga
   "DED",  // Eredivisie
+  "ELC",  // Championship
+  "BSA",  // Brasileirao
   "TSL",  // Super Lig
   "CL",   // Champions League
   "EL",   // Europa League
-  "UCL"   // Conference League (football-data lookup table code)
+  "ECL"   // Conference League
 ];
 
 const MAJOR_LEAGUE_KEYWORDS = [
@@ -38,20 +45,33 @@ const MAJOR_LEAGUE_KEYWORDS = [
   "ligue 1",
   "primeira liga",
   "eredivisie",
+  "championship",
   "super lig",
   "süper lig",
   "champions league",
   "europa league",
   "conference league",
-  "uefa"
+  "uefa",
+  "brasileirao",
+  "brazil"
 ];
+
+const CACHE_TTL = {
+  fixtureMs: 5 * 60 * 1000,
+  standingsMs: 20 * 60 * 1000,
+  teamMatchesMs: 20 * 60 * 1000,
+  h2hMs: 30 * 60 * 1000
+};
 
 const CACHE = {
   fixture: {
     key: "",
     expiresAt: 0,
     data: []
-  }
+  },
+  standings: new Map(),
+  teamMatches: new Map(),
+  h2h: new Map()
 };
 
 function nowTs() {
@@ -66,8 +86,8 @@ function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
-function rand(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+function round2(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }
 
 function getTRDateParts(date = new Date()) {
@@ -89,6 +109,12 @@ function getTRDateParts(date = new Date()) {
     day: map.day,
     ymd: `${map.year}-${map.month}-${map.day}`
   };
+}
+
+function getDateShiftedYmd(daysOffset = 0) {
+  const now = new Date();
+  const shifted = new Date(now.getTime() + daysOffset * 24 * 60 * 60 * 1000);
+  return getTRDateParts(shifted).ymd;
 }
 
 function toTRTime(dateStr) {
@@ -122,6 +148,23 @@ function toTRYmd(dateStr) {
   } catch {
     return "";
   }
+}
+
+function cacheGet(map, key) {
+  const item = map.get(key);
+  if (!item) return null;
+  if (item.expiresAt <= nowTs()) {
+    map.delete(key);
+    return null;
+  }
+  return item.data;
+}
+
+function cacheSet(map, key, data, ttlMs) {
+  map.set(key, {
+    expiresAt: nowTs() + ttlMs,
+    data
+  });
 }
 
 async function fetchJson(url, options = {}, timeoutMs = 15000) {
@@ -170,13 +213,17 @@ function normalizeFootballDataMatch(m, fallbackCode = "") {
 
   return {
     id: `fd_${id}`,
+    rawMatchId: id,
     provider: "football-data",
     match: `${home} vs ${away}`,
     homeTeam: home,
     awayTeam: away,
+    homeTeamId: m?.homeTeam?.id || null,
+    awayTeamId: m?.awayTeam?.id || null,
     league,
     country,
     competitionCode: code,
+    competitionId: m?.competition?.id || null,
     utcDate,
     trDate: toTRYmd(utcDate),
     time: toTRTime(utcDate),
@@ -232,9 +279,8 @@ function filterLeagueMode(matches, leagueMode, customLeagues) {
   return matches;
 }
 
-async function fetchCompetitionMatches(code, today) {
-  const url = `https://api.football-data.org/v4/competitions/${encodeURIComponent(code)}/matches?dateFrom=${today}&dateTo=${today}`;
-
+async function fetchCompetitionMatches(code, dateFrom, dateTo) {
+  const url = `https://api.football-data.org/v4/competitions/${encodeURIComponent(code)}/matches?dateFrom=${dateFrom}&dateTo=${dateTo}`;
   console.log("Trying competition:", code, url);
 
   try {
@@ -250,9 +296,9 @@ async function fetchCompetitionMatches(code, today) {
     const normalized = rawMatches
       .map((m) => normalizeFootballDataMatch(m, code))
       .filter(Boolean)
-      .filter((m) => m.trDate === today);
+      .filter((m) => m.trDate >= dateFrom && m.trDate <= dateTo);
 
-    console.log(`Competition ${code} normalized today matches:`, normalized.length);
+    console.log(`Competition ${code} normalized matches:`, normalized.length);
 
     return normalized;
   } catch (error) {
@@ -261,21 +307,19 @@ async function fetchCompetitionMatches(code, today) {
   }
 }
 
-async function fetchTodayMatchesFromFootballDataCompetitions() {
+async function fetchMatchesForDateRangeFromFootballDataCompetitions(dateFrom, dateTo) {
   if (!FOOTBALL_DATA_API_KEY) {
     throw new Error("FOOTBALL_DATA_API_KEY tanimli degil");
   }
 
-  const today = getTRDateParts().ymd;
   const all = [];
 
   for (const code of DEFAULT_COMPETITION_CODES) {
-    const matches = await fetchCompetitionMatches(code, today);
+    const matches = await fetchCompetitionMatches(code, dateFrom, dateTo);
     all.push(...matches);
   }
 
   const finalMatches = dedupeMatches(sortMatches(all));
-
   console.log("Competition aggregate final match count:", finalMatches.length);
 
   return {
@@ -284,9 +328,8 @@ async function fetchTodayMatchesFromFootballDataCompetitions() {
   };
 }
 
-async function getTodayMatchesWithCache() {
-  const today = getTRDateParts().ymd;
-  const cacheKey = `today_${today}`;
+async function getMatchesWithCache(dateFrom, dateTo) {
+  const cacheKey = `range_${dateFrom}_${dateTo}`;
 
   if (
     CACHE.fixture.key === cacheKey &&
@@ -309,14 +352,14 @@ async function getTodayMatchesWithCache() {
   };
 
   try {
-    result = await fetchTodayMatchesFromFootballDataCompetitions();
+    result = await fetchMatchesForDateRangeFromFootballDataCompetitions(dateFrom, dateTo);
   } catch (error) {
     console.error("Competition aggregate source fail:", error.message);
   }
 
   if (Array.isArray(result.matches) && result.matches.length > 0) {
     CACHE.fixture.key = cacheKey;
-    CACHE.fixture.expiresAt = nowTs() + 5 * 60 * 1000;
+    CACHE.fixture.expiresAt = nowTs() + CACHE_TTL.fixtureMs;
     CACHE.fixture.data = result.matches;
     console.log("Fixture cache updated with matches:", result.matches.length);
   } else {
@@ -329,134 +372,564 @@ async function getTodayMatchesWithCache() {
   return result;
 }
 
-function confidenceFromScore(score) {
-  if (score >= 80) return "Cok Yuksek";
-  if (score >= 68) return "Yuksek";
-  if (score >= 55) return "Orta";
+async function fetchCompetitionStandings(code) {
+  const cacheKey = `standings_${code}`;
+  const cached = cacheGet(CACHE.standings, cacheKey);
+  if (cached) return cached;
+
+  const url = `https://api.football-data.org/v4/competitions/${encodeURIComponent(code)}/standings`;
+  try {
+    const data = await fetchJson(url, {
+      headers: {
+        "X-Auth-Token": FOOTBALL_DATA_API_KEY
+      }
+    });
+
+    const standingsList = Array.isArray(data?.standings) ? data.standings : [];
+    const preferred =
+      standingsList.find((s) => cleanText(s?.type).toUpperCase() === "TOTAL") ||
+      standingsList[0] ||
+      null;
+
+    const table = Array.isArray(preferred?.table) ? preferred.table : [];
+    const mapped = {};
+
+    for (const row of table) {
+      const teamId = row?.team?.id;
+      if (!teamId) continue;
+
+      mapped[teamId] = {
+        position: row?.position ?? null,
+        points: row?.points ?? null,
+        playedGames: row?.playedGames ?? null,
+        won: row?.won ?? null,
+        draw: row?.draw ?? null,
+        lost: row?.lost ?? null,
+        goalsFor: row?.goalsFor ?? null,
+        goalsAgainst: row?.goalsAgainst ?? null,
+        goalDifference: row?.goalDifference ?? null,
+        form: cleanText(row?.form || "")
+      };
+    }
+
+    cacheSet(CACHE.standings, cacheKey, mapped, CACHE_TTL.standingsMs);
+    return mapped;
+  } catch (error) {
+    console.error(`Standings fetch failed for ${code}:`, error.message);
+    const empty = {};
+    cacheSet(CACHE.standings, cacheKey, empty, 2 * 60 * 1000);
+    return empty;
+  }
+}
+
+function parseFormString(formStr) {
+  const raw = cleanText(formStr);
+  if (!raw) {
+    return {
+      form5: "",
+      form10: "",
+      formScore5: 0,
+      formScore10: 0
+    };
+  }
+
+  const parts = raw
+    .split(/[,\s-]+/)
+    .map((x) => x.trim().toUpperCase())
+    .filter(Boolean);
+
+  const calc = (arr) => {
+    if (!arr.length) return 0;
+    let pts = 0;
+    for (const r of arr) {
+      if (r === "W") pts += 3;
+      else if (r === "D") pts += 1;
+    }
+    return round2((pts / (arr.length * 3)) * 100);
+  };
+
+  const last5 = parts.slice(-5);
+  const last10 = parts.slice(-10);
+
+  return {
+    form5: last5.join("-"),
+    form10: last10.join("-"),
+    formScore5: calc(last5),
+    formScore10: calc(last10)
+  };
+}
+
+function extractResultFromTeamPerspective(match, teamId) {
+  const homeId = match?.homeTeam?.id;
+  const awayId = match?.awayTeam?.id;
+  const homeScore = match?.score?.fullTime?.home;
+  const awayScore = match?.score?.fullTime?.away;
+
+  if (homeScore == null || awayScore == null) return null;
+  if (teamId !== homeId && teamId !== awayId) return null;
+
+  const isHome = teamId === homeId;
+  const gf = isHome ? homeScore : awayScore;
+  const ga = isHome ? awayScore : homeScore;
+
+  let result = "D";
+  if (gf > ga) result = "W";
+  else if (gf < ga) result = "L";
+
+  return {
+    gf,
+    ga,
+    result,
+    btts: gf > 0 && ga > 0,
+    over25: gf + ga >= 3,
+    firstHalf2Plus: ((match?.score?.halfTime?.home || 0) + (match?.score?.halfTime?.away || 0)) >= 2
+  };
+}
+
+async function fetchTeamRecentMatches(teamId, dateTo, limit = 10) {
+  if (!teamId) return [];
+
+  const cacheKey = `team_${teamId}_${dateTo}_${limit}`;
+  const cached = cacheGet(CACHE.teamMatches, cacheKey);
+  if (cached) return cached;
+
+  const dateFrom = getDateShiftedYmd(-120);
+  const url = `https://api.football-data.org/v4/teams/${encodeURIComponent(teamId)}/matches?dateFrom=${dateFrom}&dateTo=${dateTo}&status=FINISHED&limit=${limit + 6}`;
+
+  try {
+    const data = await fetchJson(url, {
+      headers: {
+        "X-Auth-Token": FOOTBALL_DATA_API_KEY
+      }
+    });
+
+    const matches = Array.isArray(data?.matches) ? data.matches : [];
+    const sliced = matches
+      .filter((m) => cleanText(m?.status).toUpperCase() === "FINISHED")
+      .sort((a, b) => new Date(b.utcDate).getTime() - new Date(a.utcDate).getTime())
+      .slice(0, limit);
+
+    cacheSet(CACHE.teamMatches, cacheKey, sliced, CACHE_TTL.teamMatchesMs);
+    return sliced;
+  } catch (error) {
+    console.error(`Team matches fetch failed for team ${teamId}:`, error.message);
+    cacheSet(CACHE.teamMatches, cacheKey, [], 2 * 60 * 1000);
+    return [];
+  }
+}
+
+function buildRecentTeamStats(teamMatches, teamId) {
+  const stats = {
+    matches: 0,
+    wins: 0,
+    draws: 0,
+    losses: 0,
+    goalsFor: 0,
+    goalsAgainst: 0,
+    bttsCount: 0,
+    over25Count: 0,
+    firstHalf2PlusCount: 0,
+    results: []
+  };
+
+  for (const m of teamMatches) {
+    const r = extractResultFromTeamPerspective(m, teamId);
+    if (!r) continue;
+
+    stats.matches += 1;
+    stats.goalsFor += r.gf;
+    stats.goalsAgainst += r.ga;
+    if (r.result === "W") stats.wins += 1;
+    else if (r.result === "D") stats.draws += 1;
+    else stats.losses += 1;
+
+    if (r.btts) stats.bttsCount += 1;
+    if (r.over25) stats.over25Count += 1;
+    if (r.firstHalf2Plus) stats.firstHalf2PlusCount += 1;
+    stats.results.push(r.result);
+  }
+
+  const played = Math.max(stats.matches, 1);
+  const formScore = round2(((stats.wins * 3 + stats.draws) / (played * 3)) * 100);
+
+  return {
+    played: stats.matches,
+    wins: stats.wins,
+    draws: stats.draws,
+    losses: stats.losses,
+    goalsForAvg: round2(stats.goalsFor / played),
+    goalsAgainstAvg: round2(stats.goalsAgainst / played),
+    bttsRate: round2((stats.bttsCount / played) * 100),
+    over25Rate: round2((stats.over25Count / played) * 100),
+    firstHalf2PlusRate: round2((stats.firstHalf2PlusCount / played) * 100),
+    form5: stats.results.slice(0, 5).reverse().join("-"),
+    form10: stats.results.slice(0, 10).reverse().join("-"),
+    formScore
+  };
+}
+
+async function fetchMatchH2H(matchId) {
+  if (!matchId) return null;
+
+  const cacheKey = `h2h_${matchId}`;
+  const cached = cacheGet(CACHE.h2h, cacheKey);
+  if (cached) return cached;
+
+  const url = `https://api.football-data.org/v4/matches/${encodeURIComponent(matchId)}/head2head?limit=5`;
+
+  try {
+    const data = await fetchJson(url, {
+      headers: {
+        "X-Auth-Token": FOOTBALL_DATA_API_KEY
+      }
+    });
+
+    cacheSet(CACHE.h2h, cacheKey, data, CACHE_TTL.h2hMs);
+    return data;
+  } catch (error) {
+    console.error(`H2H fetch failed for match ${matchId}:`, error.message);
+    cacheSet(CACHE.h2h, cacheKey, null, 2 * 60 * 1000);
+    return null;
+  }
+}
+
+function summarizeH2H(h2hData, homeTeamId, awayTeamId) {
+  const matches = Array.isArray(h2hData?.matches) ? h2hData.matches : [];
+  if (!matches.length) {
+    return {
+      matches: 0,
+      homeWins: 0,
+      draws: 0,
+      awayWins: 0,
+      avgGoals: 0,
+      bttsRate: 0,
+      over25Rate: 0,
+      firstHalf2PlusRate: 0,
+      summary: "Yeterli H2H verisi yok."
+    };
+  }
+
+  let homeWins = 0;
+  let awayWins = 0;
+  let draws = 0;
+  let totalGoals = 0;
+  let bttsCount = 0;
+  let over25Count = 0;
+  let firstHalf2PlusCount = 0;
+
+  for (const m of matches) {
+    const homeId = m?.homeTeam?.id;
+    const awayId = m?.awayTeam?.id;
+    const homeScore = m?.score?.fullTime?.home;
+    const awayScore = m?.score?.fullTime?.away;
+
+    if (homeScore == null || awayScore == null) continue;
+
+    totalGoals += homeScore + awayScore;
+    if (homeScore > 0 && awayScore > 0) bttsCount += 1;
+    if (homeScore + awayScore >= 3) over25Count += 1;
+    if (((m?.score?.halfTime?.home || 0) + (m?.score?.halfTime?.away || 0)) >= 2) {
+      firstHalf2PlusCount += 1;
+    }
+
+    if (homeScore === awayScore) {
+      draws += 1;
+      continue;
+    }
+
+    const winnerId = homeScore > awayScore ? homeId : awayId;
+    if (winnerId === homeTeamId) homeWins += 1;
+    else if (winnerId === awayTeamId) awayWins += 1;
+  }
+
+  let summary = "H2H dengeli gorunuyor.";
+  if (homeWins >= awayWins + 2) summary = "Son H2H serisi ev sahibi lehine.";
+  else if (awayWins >= homeWins + 2) summary = "Son H2H serisi deplasman lehine.";
+  else if (over25Count >= Math.ceil(matches.length * 0.6)) summary = "H2H tarafinda gollu mac egilimi var.";
+
+  return {
+    matches: matches.length,
+    homeWins,
+    draws,
+    awayWins,
+    avgGoals: round2(totalGoals / matches.length),
+    bttsRate: round2((bttsCount / matches.length) * 100),
+    over25Rate: round2((over25Count / matches.length) * 100),
+    firstHalf2PlusRate: round2((firstHalf2PlusCount / matches.length) * 100),
+    summary
+  };
+}
+
+async function enrichMatch(match) {
+  const standings = await fetchCompetitionStandings(match.competitionCode);
+
+  const homeStanding = match.homeTeamId ? standings[match.homeTeamId] || null : null;
+  const awayStanding = match.awayTeamId ? standings[match.awayTeamId] || null : null;
+
+  const dateTo = getTRDateParts(new Date(new Date(match.utcDate).getTime() - 60 * 1000)).ymd;
+
+  const [homeRecent, awayRecent, h2hData] = await Promise.all([
+    fetchTeamRecentMatches(match.homeTeamId, dateTo, 10),
+    fetchTeamRecentMatches(match.awayTeamId, dateTo, 10),
+    fetchMatchH2H(match.rawMatchId)
+  ]);
+
+  const homeRecentStats = buildRecentTeamStats(homeRecent, match.homeTeamId);
+  const awayRecentStats = buildRecentTeamStats(awayRecent, match.awayTeamId);
+
+  const homeStandingForm = parseFormString(homeStanding?.form || "");
+  const awayStandingForm = parseFormString(awayStanding?.form || "");
+
+  const h2h = summarizeH2H(h2hData, match.homeTeamId, match.awayTeamId);
+
+  return {
+    ...match,
+    enriched: {
+      home: {
+        standing: homeStanding,
+        standingForm: homeStandingForm,
+        recent: homeRecentStats
+      },
+      away: {
+        standing: awayStanding,
+        standingForm: awayStandingForm,
+        recent: awayRecentStats
+      },
+      h2h
+    }
+  };
+}
+
+function buildStrengthScore(side, opponent) {
+  const recent = side?.recent || {};
+  const standing = side?.standing || {};
+  const standingForm = side?.standingForm || {};
+
+  const oppRecent = opponent?.recent || {};
+  const oppStanding = opponent?.standing || {};
+
+  let score = 50;
+
+  score += (Number(recent.formScore || 0) - 50) * 0.35;
+  score += ((Number(recent.goalsForAvg || 0) - Number(recent.goalsAgainstAvg || 0)) * 8);
+  score += (Number(recent.over25Rate || 0) - 50) * 0.06;
+  score += (Number(recent.bttsRate || 0) - 50) * 0.03;
+  score += (Number(standingForm.formScore5 || 0) - 50) * 0.15;
+
+  if (standing.position && oppStanding.position) {
+    const posEdge = Number(oppStanding.position) - Number(standing.position);
+    score += posEdge * 1.8;
+  }
+
+  if (standing.points != null && oppStanding.points != null) {
+    score += (Number(standing.points) - Number(oppStanding.points)) * 0.12;
+  }
+
+  score -= (Number(oppRecent.formScore || 0) - 50) * 0.18;
+
+  return round2(clamp(score, 1, 99));
+}
+
+function confidenceFromLean(mainLean, riskScore) {
+  const x = mainLean - riskScore * 0.25;
+  if (x >= 72) return "Cok Yuksek";
+  if (x >= 62) return "Yuksek";
+  if (x >= 52) return "Orta";
   return "Dusuk";
 }
 
-function riskFromScore(score) {
-  if (score >= 78) return "Dusuk risk";
-  if (score >= 58) return "Orta risk";
+function riskFromBalance(balanceDiff, volatility) {
+  const riskRaw = volatility - Math.min(balanceDiff, 25) * 0.7;
+  if (riskRaw <= 18) return "Dusuk risk";
+  if (riskRaw <= 32) return "Orta risk";
   return "Yuksek risk";
 }
 
-function buildLocalTip(realMatch, extraPrompt = "") {
-  const homeStrength = rand(54, 88);
-  const awayStrength = rand(48, 84);
-  const formGap = homeStrength - awayStrength;
+function buildRealTipFromEnrichedMatch(match, extraPrompt = "") {
+  const home = match?.enriched?.home || {};
+  const away = match?.enriched?.away || {};
+  const h2h = match?.enriched?.h2h || {};
+
+  const homeStrength = buildStrengthScore(home, away);
+  const awayStrength = buildStrengthScore(away, home);
+  const gap = round2(homeStrength - awayStrength);
+  const balanceDiff = Math.abs(gap);
 
   let resultPrediction = "X";
-  if (formGap >= 8) resultPrediction = "1";
-  else if (formGap <= -8) resultPrediction = "2";
+  if (gap >= 8) resultPrediction = "1";
+  else if (gap <= -8) resultPrediction = "2";
 
-  const probOver25 = clamp(Math.round((homeStrength + awayStrength) / 2 - 10 + rand(-8, 8)), 18, 88);
-  const probBtts = clamp(Math.round((homeStrength + awayStrength) / 2 - 16 + rand(-10, 10)), 15, 84);
-  const probFirstHalf2Plus = clamp(Math.round(probOver25 * 0.58 + rand(-8, 8)), 8, 70);
+  const combinedGoalBase =
+    ((Number(home?.recent?.goalsForAvg || 0) + Number(away?.recent?.goalsForAvg || 0)) * 17) +
+    ((Number(home?.recent?.goalsAgainstAvg || 0) + Number(away?.recent?.goalsAgainstAvg || 0)) * 8);
 
-  const combinedScore = Math.round(
-    homeStrength * 0.28 +
-    awayStrength * 0.14 +
-    probOver25 * 0.20 +
-    probBtts * 0.12 +
-    (100 - Math.min(Math.abs(formGap) * 2, 50)) * 0.08 +
-    rand(45, 80) * 0.18
+  const over25Lean = clamp(
+    Math.round(
+      combinedGoalBase * 0.9 +
+      Number(home?.recent?.over25Rate || 0) * 0.30 +
+      Number(away?.recent?.over25Rate || 0) * 0.30 +
+      Number(h2h?.over25Rate || 0) * 0.24 -
+      28
+    ),
+    10,
+    92
   );
 
-  const confidence = confidenceFromScore(combinedScore);
-  const riskNote = riskFromScore(combinedScore);
+  const bttsLean = clamp(
+    Math.round(
+      Number(home?.recent?.bttsRate || 0) * 0.40 +
+      Number(away?.recent?.bttsRate || 0) * 0.40 +
+      Number(h2h?.bttsRate || 0) * 0.20
+    ),
+    8,
+    90
+  );
+
+  const firstHalf2PlusLean = clamp(
+    Math.round(
+      Number(home?.recent?.firstHalf2PlusRate || 0) * 0.42 +
+      Number(away?.recent?.firstHalf2PlusRate || 0) * 0.42 +
+      Number(h2h?.firstHalf2PlusRate || 0) * 0.16
+    ),
+    5,
+    78
+  );
+
+  const homeLean = clamp(
+    Math.round(
+      50 + gap * 2.2 +
+      (h2h.homeWins - h2h.awayWins) * 2
+    ),
+    5,
+    90
+  );
+
+  const awayLean = clamp(
+    Math.round(
+      50 + (awayStrength - homeStrength) * 2.2 +
+      (h2h.awayWins - h2h.homeWins) * 2
+    ),
+    5,
+    90
+  );
+
+  const volatility =
+    Math.abs(Number(home?.recent?.goalsForAvg || 0) - Number(home?.recent?.goalsAgainstAvg || 0)) * 4 +
+    Math.abs(Number(away?.recent?.goalsForAvg || 0) - Number(away?.recent?.goalsAgainstAvg || 0)) * 4 +
+    Math.abs(50 - bttsLean) * 0.12 +
+    Math.abs(50 - over25Lean) * 0.10;
+
+  const dominantLean = Math.max(homeLean, awayLean, over25Lean, bttsLean);
+  const riskNote = riskFromBalance(balanceDiff, volatility);
+  const confidence = confidenceFromLean(dominantLean, volatility);
 
   let recommendedBet = "Cifte Sans 1X";
-  if (resultPrediction === "1" && probOver25 >= 64) recommendedBet = "Mac Sonucu 1 ve 1.5 Ust";
-  else if (resultPrediction === "1") recommendedBet = "Mac Sonucu 1";
-  else if (resultPrediction === "2" && probOver25 >= 62) recommendedBet = "Mac Sonucu 2 veya 1.5 Ust";
-  else if (probBtts >= 63) recommendedBet = "KG Var";
-  else if (probOver25 >= 68) recommendedBet = "2.5 Ust";
+  if (resultPrediction === "1" && over25Lean >= 64) recommendedBet = "Mac Sonucu 1 ve 1.5 Ust";
+  else if (resultPrediction === "1" && balanceDiff >= 10) recommendedBet = "Mac Sonucu 1";
+  else if (resultPrediction === "2" && over25Lean >= 64) recommendedBet = "Mac Sonucu 2 veya 1.5 Ust";
+  else if (resultPrediction === "2" && balanceDiff >= 10) recommendedBet = "Mac Sonucu 2";
+  else if (over25Lean >= 68) recommendedBet = "2.5 Ust";
+  else if (bttsLean >= 64) recommendedBet = "KG Var";
   else if (resultPrediction === "X") recommendedBet = "X veya 3.5 Alt";
 
   let scorePrediction = "1-1";
-  if (resultPrediction === "1" && probOver25 >= 68) scorePrediction = "2-1";
-  else if (resultPrediction === "1" && probOver25 < 54) scorePrediction = "1-0";
-  else if (resultPrediction === "2" && probOver25 >= 66) scorePrediction = "1-2";
-  else if (resultPrediction === "2" && probOver25 < 54) scorePrediction = "0-1";
-  else if (probOver25 >= 74) scorePrediction = "2-2";
+  if (resultPrediction === "1" && over25Lean >= 70) scorePrediction = "2-1";
+  else if (resultPrediction === "1" && over25Lean < 55) scorePrediction = "1-0";
+  else if (resultPrediction === "2" && over25Lean >= 70) scorePrediction = "1-2";
+  else if (resultPrediction === "2" && over25Lean < 55) scorePrediction = "0-1";
+  else if (over25Lean >= 76 && bttsLean >= 60) scorePrediction = "2-2";
 
-  const homeGoalsAvg = (homeStrength / 40).toFixed(2);
-  const awayGoalsAvg = (awayStrength / 42).toFixed(2);
-  const homeConcededAvg = (rand(7, 18) / 10).toFixed(2);
-  const awayConcededAvg = (rand(8, 20) / 10).toFixed(2);
+  let tableContext = "Lig siralamasi dengeli gorunuyor.";
+  const homePos = home?.standing?.position;
+  const awayPos = away?.standing?.position;
+  if (homePos && awayPos) {
+    if (homePos + 4 <= awayPos) {
+      tableContext = "Ev sahibi lig siralamasi ve puan tablosunda daha avantajli.";
+    } else if (awayPos + 4 <= homePos) {
+      tableContext = "Deplasman tarafi lig tablosunda daha ust seviyede.";
+    } else {
+      tableContext = "Iki takim lig tablosunda birbirine yakin.";
+    }
+  }
 
-  const homeWins = clamp(Math.round(homeStrength / 12), 1, 8);
-  const awayWins = clamp(Math.round(awayStrength / 13), 1, 8);
-
-  const homeForm = `Son 10 mac: ${homeWins}G ${rand(1, 3)}B ${rand(1, 4)}M`;
-  const awayForm = `Son 10 mac: ${awayWins}G ${rand(1, 3)}B ${rand(2, 5)}M`;
-
-  const homePerformance =
-    homeStrength >= 78 ? "Cok guclu" :
-    homeStrength >= 66 ? "Iyi" :
-    homeStrength >= 56 ? "Orta" : "Dalgali";
-
-  const awayPerformance =
-    awayStrength >= 76 ? "Cok guclu" :
-    awayStrength >= 64 ? "Iyi" :
-    awayStrength >= 54 ? "Orta" : "Dalgali";
-
-  const h2hSummary =
-    resultPrediction === "1"
-      ? "Guncel denge ev sahibine hafif yakin."
-      : resultPrediction === "2"
-      ? "Deplasman tarafi surpriz potansiyeli tasiyor."
-      : "Eslesme dengeli gorunuyor.";
-
-  const tableContext =
-    resultPrediction === "1"
-      ? "Ev sahibi taraf saha avantajiyla bir adim onde gorunuyor."
-      : resultPrediction === "2"
-      ? "Deplasman ekibi gecis oyunu ile puan arayabilir."
-      : "Mac kontrollu ve dengeye yakin bir senaryo cizebilir.";
+  const h2hSummary = h2h?.summary || "Yeterli H2H verisi yok.";
 
   const reasons = [
-    "Mac bugunun gercek fikstur kaynagindan alindi.",
-    `Olasilik modeli 2.5 Ust icin %${probOver25}, KG Var icin %${probBtts} hesap verdi.`,
+    `Form verisi: ${match.homeTeam} son maclarda ${home?.recent?.form10 || home?.standingForm?.form10 || "yetersiz"}, ${match.awayTeam} ise ${away?.recent?.form10 || away?.standingForm?.form10 || "yetersiz"}.`,
+    `Gol egilimi: 2.5 Ust %${over25Lean}, KG Var %${bttsLean}, Ilk yari 2+ gol %${firstHalf2PlusLean}.`,
     extraPrompt
-      ? `Ek not dikkate alindi: ${extraPrompt.slice(0, 110)}`
-      : "Risk notu temel denge, gol beklentisi ve form modeline gore olusturuldu."
+      ? `Ek not dikkate alindi: ${cleanText(extraPrompt).slice(0, 110)}`
+      : `H2H ozeti: ${h2hSummary}`
   ];
 
   return {
-    match_id: realMatch.id,
-    match: realMatch.match,
-    league: realMatch.league,
-    time: realMatch.time,
-    match_importance: realMatch.stage || "Normal",
+    match_id: match.id,
+    raw_match_id: match.rawMatchId,
+    match: match.match,
+    league: match.league,
+    time: match.time,
+    match_importance: match.stage || "Normal",
     confidence,
     risk_note: riskNote,
     result_prediction: resultPrediction,
     score_prediction: scorePrediction,
-    prob_over25: probOver25,
-    prob_first_half_2plus: probFirstHalf2Plus,
-    prob_btts: probBtts,
+    prob_over25: over25Lean,
+    prob_first_half_2plus: firstHalf2PlusLean,
+    prob_btts: bttsLean,
+    home_lean: homeLean,
+    away_lean: awayLean,
     recommended_bet: recommendedBet,
     h2h_summary: h2hSummary,
-    home_form: homeForm,
-    away_form: awayForm,
-    home_goals_avg: homeGoalsAvg,
-    home_conceded_avg: homeConcededAvg,
-    away_goals_avg: awayGoalsAvg,
-    away_conceded_avg: awayConcededAvg,
-    home_performance: homePerformance,
-    away_performance: awayPerformance,
+    home_form: home?.recent?.form10 || home?.standingForm?.form10 || "",
+    away_form: away?.recent?.form10 || away?.standingForm?.form10 || "",
+    home_goals_avg: home?.recent?.goalsForAvg ?? 0,
+    home_conceded_avg: home?.recent?.goalsAgainstAvg ?? 0,
+    away_goals_avg: away?.recent?.goalsForAvg ?? 0,
+    away_conceded_avg: away?.recent?.goalsAgainstAvg ?? 0,
+    home_performance:
+      homeStrength >= 72 ? "Cok guclu" :
+      homeStrength >= 61 ? "Iyi" :
+      homeStrength >= 50 ? "Orta" : "Dalgali",
+    away_performance:
+      awayStrength >= 72 ? "Cok guclu" :
+      awayStrength >= 61 ? "Iyi" :
+      awayStrength >= 50 ? "Orta" : "Dalgali",
     table_context: tableContext,
     reasons,
-    source_match: realMatch.provider
+    source_match: match.provider,
+    real_data: {
+      home: {
+        teamId: match.homeTeamId,
+        position: home?.standing?.position ?? null,
+        points: home?.standing?.points ?? null,
+        form5: home?.recent?.form5 || home?.standingForm?.form5 || "",
+        form10: home?.recent?.form10 || home?.standingForm?.form10 || "",
+        formScore: home?.recent?.formScore ?? home?.standingForm?.formScore10 ?? 0
+      },
+      away: {
+        teamId: match.awayTeamId,
+        position: away?.standing?.position ?? null,
+        points: away?.standing?.points ?? null,
+        form5: away?.recent?.form5 || away?.standingForm?.form5 || "",
+        form10: away?.recent?.form10 || away?.standingForm?.form10 || "",
+        formScore: away?.recent?.formScore ?? away?.standingForm?.formScore10 ?? 0
+      },
+      h2h: {
+        matches: h2h.matches || 0,
+        homeWins: h2h.homeWins || 0,
+        draws: h2h.draws || 0,
+        awayWins: h2h.awayWins || 0,
+        avgGoals: h2h.avgGoals || 0,
+        over25Rate: h2h.over25Rate || 0,
+        bttsRate: h2h.bttsRate || 0
+      }
+    }
   };
 }
 
 async function improveTipsWithOpenAI(tips, extraPrompt = "") {
   if (!openai) {
-    return { tips, source: "fallback-basic" };
+    return { tips, source: "fallback-realdata" };
   }
 
   const prompt = `
@@ -471,7 +944,8 @@ Kurallar:
 - Turkce yaz ama ascii kullan
 - Yeni alan ekleme
 - Asiri iddiali olma
-- Fikstur gercek; match, league, time, match_id ve source_match alanlarini degistirme
+- Gercek sayisal verileri bozma
+- match, match_id, raw_match_id, league, time, source_match, real_data alanlarini degistirme
 - Ek istek: ${extraPrompt || "yok"}
 
 Veri:
@@ -481,7 +955,7 @@ ${JSON.stringify(tips, null, 2)}
   try {
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.6,
+      temperature: 0.45,
       messages: [
         { role: "system", content: "Return only valid JSON." },
         { role: "user", content: prompt }
@@ -503,27 +977,30 @@ ${JSON.stringify(tips, null, 2)}
         ...tip,
         match: tips[i].match,
         match_id: tips[i].match_id,
+        raw_match_id: tips[i].raw_match_id,
         league: tips[i].league,
         time: tips[i].time,
-        source_match: tips[i].source_match
+        source_match: tips[i].source_match,
+        real_data: tips[i].real_data
       }));
 
       return { tips: safeTips, source: "openai" };
     }
 
-    return { tips, source: "fallback-advanced" };
+    return { tips, source: "fallback-openai-parse" };
   } catch (error) {
     console.error("OpenAI fallback devrede:", error?.message || error);
-    return { tips, source: "fallback-advanced" };
+    return { tips, source: "fallback-openai-error" };
   }
 }
 
 function sortByStrength(tips) {
   const scoreTip = (tip) => {
     let score = 0;
-    score += Number(tip.prob_over25 || 0) * 0.20;
-    score += Number(tip.prob_btts || 0) * 0.12;
-    score += Number(tip.prob_first_half_2plus || 0) * 0.08;
+    score += Number(tip.prob_over25 || 0) * 0.18;
+    score += Number(tip.prob_btts || 0) * 0.11;
+    score += Number(tip.prob_first_half_2plus || 0) * 0.07;
+    score += Math.max(Number(tip.home_lean || 0), Number(tip.away_lean || 0)) * 0.18;
 
     const conf = String(tip.confidence || "").toLowerCase();
     if (conf.includes("cok yuksek")) score += 35;
@@ -555,9 +1032,9 @@ function buildCoupons(tips) {
   const balanced = sorted.slice(1, 4).map((tip) => ({
     match: tip.match,
     bet:
-      Number(tip.prob_over25 || 0) >= 65
+      Number(tip.prob_over25 || 0) >= 66
         ? "2.5 Ust"
-        : Number(tip.prob_btts || 0) >= 60
+        : Number(tip.prob_btts || 0) >= 62
         ? "KG Var"
         : tip.recommended_bet,
     confidence: tip.confidence,
@@ -592,6 +1069,7 @@ app.get("/", (req, res) => {
     endpoints: {
       health: "/health",
       today_matches: "/today-matches",
+      match_details: "/match-details/:id",
       analyze: "/analyze"
     }
   });
@@ -604,7 +1082,13 @@ app.get("/health", (req, res) => {
     openai: !!openai,
     footballDataConfigured: !!FOOTBALL_DATA_API_KEY,
     cacheActive: true,
-    competitions: DEFAULT_COMPETITION_CODES
+    competitions: DEFAULT_COMPETITION_CODES,
+    cacheInfo: {
+      fixtureTtlMinutes: CACHE_TTL.fixtureMs / 60000,
+      standingsTtlMinutes: CACHE_TTL.standingsMs / 60000,
+      teamMatchesTtlMinutes: CACHE_TTL.teamMatchesMs / 60000,
+      h2hTtlMinutes: CACHE_TTL.h2hMs / 60000
+    }
   });
 });
 
@@ -615,9 +1099,14 @@ app.get("/today-matches", async (req, res) => {
       .split(",")
       .map((x) => x.trim())
       .filter(Boolean);
-    const match_limit = Math.max(1, Math.min(Number(req.query.match_limit) || 30, 100));
 
-    const fixtureResult = await getTodayMatchesWithCache();
+    const match_limit = Math.max(1, Math.min(Number(req.query.match_limit) || 40, 150));
+    const day_offset = clamp(Number(req.query.day_offset) || 0, 0, 2);
+
+    const dateFrom = getDateShiftedYmd(day_offset);
+    const dateTo = dateFrom;
+
+    const fixtureResult = await getMatchesWithCache(dateFrom, dateTo);
     console.log("fixtureResult:", {
       provider: fixtureResult.provider,
       count: fixtureResult.matches.length
@@ -629,7 +1118,7 @@ app.get("/today-matches", async (req, res) => {
 
     res.json({
       ok: true,
-      date_tr: getTRDateParts().ymd,
+      date_tr: dateFrom,
       fixture_source: fixtureResult.provider,
       total_found: allToday.length,
       total_after_filter: filtered.length,
@@ -640,7 +1129,44 @@ app.get("/today-matches", async (req, res) => {
     console.error("today-matches error:", error);
     res.status(500).json({
       ok: false,
-      error: error?.message || "Bugunun maclari alinamadi"
+      error: error?.message || "Maclar alinamadi"
+    });
+  }
+});
+
+app.get("/match-details/:id", async (req, res) => {
+  try {
+    const matchId = String(req.params.id || "").trim();
+    if (!matchId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Gecerli match id gerekli"
+      });
+    }
+
+    const allMatchesResult = await getMatchesWithCache(getDateShiftedYmd(0), getDateShiftedYmd(0));
+    const found =
+      allMatchesResult.matches.find((m) => m.id === matchId || String(m.rawMatchId) === matchId) ||
+      null;
+
+    if (!found) {
+      return res.status(404).json({
+        ok: false,
+        error: "Mac bulunamadi"
+      });
+    }
+
+    const enriched = await enrichMatch(found);
+
+    res.json({
+      ok: true,
+      match: enriched
+    });
+  } catch (error) {
+    console.error("match-details error:", error);
+    res.status(500).json({
+      ok: false,
+      error: error?.message || "Mac detayi alinamadi"
     });
   }
 });
@@ -651,10 +1177,15 @@ app.post("/analyze", async (req, res) => {
       match_limit = 10,
       league_mode = "all",
       custom_leagues = [],
-      extra_prompt = ""
+      extra_prompt = "",
+      day_offset = 0
     } = req.body || {};
 
-    const fixtureResult = await getTodayMatchesWithCache();
+    const safeDayOffset = clamp(Number(day_offset) || 0, 0, 2);
+    const dateFrom = getDateShiftedYmd(safeDayOffset);
+    const dateTo = dateFrom;
+
+    const fixtureResult = await getMatchesWithCache(dateFrom, dateTo);
     console.log("analyze fixtureResult:", {
       provider: fixtureResult.provider,
       count: fixtureResult.matches.length
@@ -663,7 +1194,7 @@ app.post("/analyze", async (req, res) => {
     const allToday = fixtureResult.matches;
     const filtered = filterLeagueMode(allToday, league_mode, custom_leagues);
 
-    const safeLimit = Math.max(1, Math.min(Number(match_limit) || 10, 100));
+    const safeLimit = Math.max(1, Math.min(Number(match_limit) || 10, 20));
     const selectedMatches = filtered.slice(0, safeLimit);
 
     if (!selectedMatches.length) {
@@ -675,14 +1206,33 @@ app.post("/analyze", async (req, res) => {
         tips: [],
         coupons: { safest: [], balanced: [], surprise: [] },
         meta: {
-          message: "Bugun filtreye uygun mac bulunamadi.",
+          message: "Filtreye uygun mac bulunamadi.",
           total_found_today: allToday.length,
-          total_after_filter: filtered.length
+          total_after_filter: filtered.length,
+          analyze_date: dateFrom
         }
       });
     }
 
-    const localTips = selectedMatches.map((m) => buildLocalTip(m, extra_prompt));
+    const enrichedMatches = [];
+    for (const m of selectedMatches) {
+      try {
+        const enriched = await enrichMatch(m);
+        enrichedMatches.push(enriched);
+      } catch (error) {
+        console.error("Enrich failed for match:", m?.id, error?.message || error);
+        enrichedMatches.push({
+          ...m,
+          enriched: {
+            home: { standing: null, standingForm: {}, recent: {} },
+            away: { standing: null, standingForm: {}, recent: {} },
+            h2h: { matches: 0, homeWins: 0, draws: 0, awayWins: 0, avgGoals: 0, bttsRate: 0, over25Rate: 0, firstHalf2PlusRate: 0, summary: "Veri alinamadi." }
+          }
+        });
+      }
+    }
+
+    const localTips = enrichedMatches.map((m) => buildRealTipFromEnrichedMatch(m, extra_prompt));
     const improved = await improveTipsWithOpenAI(localTips, extra_prompt);
     const finalTips = sortByStrength(improved.tips);
     const coupons = buildCoupons(finalTips);
@@ -691,6 +1241,7 @@ app.post("/analyze", async (req, res) => {
       ok: true,
       source: improved.source,
       fixture_source: fixtureResult.provider,
+      analyze_date: dateFrom,
       total_matches: finalTips.length,
       tips: finalTips,
       coupons,
