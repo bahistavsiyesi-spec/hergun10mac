@@ -13,6 +13,19 @@ const PORT = process.env.PORT || 3000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const FOOTBALL_DATA_API_KEY = process.env.FOOTBALL_DATA_API_KEY || "";
 
+/**
+ * RapidAPI env
+ * Not:
+ * Kullandigin endpoint path farkliysa .env icinden net ver:
+ * RAPIDAPI_MATCHES_BY_DATE_PATH=/football/matches-by-date?date={date}
+ * gibi.
+ */
+const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || "";
+const RAPIDAPI_HOST =
+  process.env.RAPIDAPI_HOST || "free-api-live-football-data.p.rapidapi.com";
+const RAPIDAPI_MATCHES_BY_DATE_PATH =
+  process.env.RAPIDAPI_MATCHES_BY_DATE_PATH || "";
+
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
 /**
@@ -232,18 +245,289 @@ function normalizeFootballDataMatch(m, fallbackCode = "") {
   };
 }
 
+/* =========================================================
+   RAPIDAPI HELPERS
+========================================================= */
+
+function slugifyCompetitionCode(league = "", country = "") {
+  const text = `${league} ${country}`.toLowerCase();
+
+  if (text.includes("premier league")) return "PL";
+  if (text.includes("la liga") || text.includes("primera division")) return "PD";
+  if (text.includes("serie a")) return "SA";
+  if (text.includes("bundesliga")) return "BL1";
+  if (text.includes("ligue 1")) return "FL1";
+  if (text.includes("primeira liga")) return "PPL";
+  if (text.includes("eredivisie")) return "DED";
+  if (text.includes("championship")) return "ELC";
+  if (text.includes("super lig") || text.includes("süper lig")) return "TSL";
+  if (text.includes("champions league")) return "CL";
+  if (text.includes("europa league")) return "EL";
+  if (text.includes("conference league")) return "ECL";
+  if (text.includes("brasileirao")) return "BSA";
+
+  return "";
+}
+
+function normalizeTextForKey(v = "") {
+  return String(v)
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function dedupeKey(match) {
+  return [
+    normalizeTextForKey(match.homeTeam),
+    normalizeTextForKey(match.awayTeam),
+    cleanText(match.trDate),
+    cleanText(match.time)
+  ].join("__");
+}
+
+function normalizeRapidApiStatus(rawStatus = "") {
+  const s = cleanText(rawStatus).toLowerCase();
+
+  if (!s) return "SCHEDULED";
+  if (s.includes("not started")) return "SCHEDULED";
+  if (s.includes("scheduled")) return "SCHEDULED";
+  if (s.includes("postpon")) return "POSTPONED";
+  if (s.includes("cancel")) return "CANCELLED";
+  if (s.includes("finish")) return "FINISHED";
+  if (s.includes("ft")) return "FINISHED";
+  if (s.includes("live")) return "LIVE";
+  if (s.includes("in progress")) return "LIVE";
+
+  return rawStatus || "SCHEDULED";
+}
+
+function getObjectValueByPaths(obj, paths = []) {
+  for (const path of paths) {
+    let cur = obj;
+    let ok = true;
+    for (const part of path.split(".")) {
+      if (cur && Object.prototype.hasOwnProperty.call(cur, part)) {
+        cur = cur[part];
+      } else {
+        ok = false;
+        break;
+      }
+    }
+    if (ok && cur != null) return cur;
+  }
+  return null;
+}
+
+function pickTeamName(raw, side) {
+  const sideLower = side.toLowerCase();
+
+  return cleanText(
+    getObjectValueByPaths(raw, [
+      `${sideLower}Team.name`,
+      `${sideLower}Team.team_name`,
+      `${sideLower}Team.shortName`,
+      `${sideLower}Team.short_name`,
+      `${sideLower}.name`,
+      `${sideLower}.team_name`,
+      `${sideLower}.shortName`,
+      `${sideLower}.short_name`,
+      side === "home" ? "teams.home.name" : "teams.away.name",
+      side === "home" ? "teams.home.team_name" : "teams.away.team_name",
+      side === "home" ? "participant.home.name" : "participant.away.name",
+      side === "home" ? "participants.home.name" : "participants.away.name",
+      side === "home" ? "home_name" : "away_name",
+      side === "home" ? "homeTeamName" : "awayTeamName",
+      side === "home" ? "home_name_en" : "away_name_en",
+      side === "home" ? "team_home.name" : "team_away.name",
+      side === "home" ? "homeCompetitor.name" : "awayCompetitor.name"
+    ])
+  );
+}
+
+function pickTeamId(raw, side) {
+  const sideLower = side.toLowerCase();
+
+  return (
+    getObjectValueByPaths(raw, [
+      `${sideLower}Team.id`,
+      `${sideLower}.id`,
+      side === "home" ? "teams.home.id" : "teams.away.id",
+      side === "home" ? "participant.home.id" : "participant.away.id",
+      side === "home" ? "participants.home.id" : "participants.away.id",
+      side === "home" ? "homeTeamId" : "awayTeamId",
+      side === "home" ? "team_home.id" : "team_away.id",
+      side === "home" ? "homeCompetitor.id" : "awayCompetitor.id"
+    ]) || null
+  );
+}
+
+function pickLeagueName(raw) {
+  return cleanText(
+    getObjectValueByPaths(raw, [
+      "competition.name",
+      "league.name",
+      "tournament.name",
+      "league_name",
+      "competition_name",
+      "league",
+      "tournament",
+      "category.name",
+      "sport_event.tournament.name",
+      "season.name"
+    ])
+  );
+}
+
+function pickCountryName(raw) {
+  return cleanText(
+    getObjectValueByPaths(raw, [
+      "country.name",
+      "area.name",
+      "competition.area.name",
+      "league.country",
+      "country_name",
+      "category.country_name",
+      "category.name",
+      "sport_event.sport_event_context.category.name"
+    ])
+  );
+}
+
+function pickUtcDate(raw) {
+  const val = cleanText(
+    getObjectValueByPaths(raw, [
+      "utcDate",
+      "date",
+      "match_date",
+      "event_date",
+      "kickoff",
+      "kickoffTime",
+      "kick_off",
+      "startTime",
+      "start_time",
+      "startsAt",
+      "starts_at",
+      "scheduled_at",
+      "fixture.date",
+      "sport_event.start_time"
+    ])
+  );
+
+  if (!val) return "";
+
+  const d = new Date(val);
+  if (!Number.isNaN(d.getTime())) return d.toISOString();
+
+  return "";
+}
+
+function pickRapidApiItems(data) {
+  const candidates = [
+    data?.matches,
+    data?.response,
+    data?.data,
+    data?.events,
+    data?.fixtures,
+    data?.results,
+    data?.items,
+    data?.matches?.events,
+    data?.data?.matches,
+    data?.data?.events,
+    data?.response?.matches,
+    data?.response?.events
+  ];
+
+  for (const c of candidates) {
+    if (Array.isArray(c)) return c;
+  }
+
+  if (data && typeof data === "object") {
+    for (const [k, v] of Object.entries(data)) {
+      if (Array.isArray(v) && v.length && typeof v[0] === "object") {
+        return v;
+      }
+    }
+  }
+
+  return [];
+}
+
+function normalizeRapidApiMatch(raw) {
+  const rawId =
+    getObjectValueByPaths(raw, [
+      "id",
+      "event_id",
+      "match_id",
+      "fixture.id",
+      "event.id",
+      "sport_event.id"
+    ]) || null;
+
+  const home = pickTeamName(raw, "home");
+  const away = pickTeamName(raw, "away");
+  const league = pickLeagueName(raw);
+  const country = pickCountryName(raw);
+  const utcDate = pickUtcDate(raw);
+  const status = normalizeRapidApiStatus(
+    cleanText(
+      getObjectValueByPaths(raw, [
+        "status",
+        "match_status",
+        "event_status",
+        "fixture.status.long",
+        "fixture.status.short",
+        "sport_event_status.status"
+      ])
+    )
+  );
+
+  if (!home || !away || !league || !utcDate) return null;
+  if (home.toLowerCase() === away.toLowerCase()) return null;
+
+  const competitionCode = slugifyCompetitionCode(league, country);
+
+  return {
+    id: `ra_${rawId || `${normalizeTextForKey(home)}_${normalizeTextForKey(away)}_${utcDate}`}`,
+    rawMatchId: rawId || null,
+    provider: "rapidapi",
+    match: `${home} vs ${away}`,
+    homeTeam: home,
+    awayTeam: away,
+    homeTeamId: pickTeamId(raw, "home"),
+    awayTeamId: pickTeamId(raw, "away"),
+    league,
+    country,
+    competitionCode,
+    competitionId:
+      getObjectValueByPaths(raw, [
+        "competition.id",
+        "league.id",
+        "tournament.id",
+        "season.id"
+      ]) || null,
+    utcDate,
+    trDate: toTRYmd(utcDate),
+    time: toTRTime(utcDate),
+    status,
+    stage: cleanText(
+      getObjectValueByPaths(raw, [
+        "stage",
+        "round",
+        "fixture.round",
+        "sport_event.sport_event_context.round.name"
+      ])
+    ) || "Normal"
+  };
+}
+
 function dedupeMatches(matches) {
   const seen = new Set();
   const out = [];
 
   for (const m of matches) {
-    const key = [
-      m.homeTeam.toLowerCase(),
-      m.awayTeam.toLowerCase(),
-      m.trDate,
-      m.time
-    ].join("__");
-
+    const key = dedupeKey(m);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(m);
@@ -259,6 +543,125 @@ function sortMatches(matches) {
     return ta - tb;
   });
 }
+
+function mergeMatchSources(primary, secondary) {
+  const map = new Map();
+
+  for (const m of [...primary, ...secondary]) {
+    const key = dedupeKey(m);
+    if (!map.has(key)) {
+      map.set(key, m);
+      continue;
+    }
+
+    const existing = map.get(key);
+
+    // RapidAPI ana kaynak olsun, ama eksik alan varsa football-data'dan tamamla
+    const merged = {
+      ...existing,
+      ...m,
+      id: existing.id,
+      rawMatchId: existing.rawMatchId || m.rawMatchId || null,
+      provider:
+        existing.provider === "rapidapi" || m.provider !== "rapidapi"
+          ? existing.provider
+          : m.provider,
+      homeTeamId: existing.homeTeamId || m.homeTeamId || null,
+      awayTeamId: existing.awayTeamId || m.awayTeamId || null,
+      competitionCode: existing.competitionCode || m.competitionCode || "",
+      competitionId: existing.competitionId || m.competitionId || null,
+      country: existing.country || m.country || "",
+      stage: existing.stage || m.stage || "Normal"
+    };
+
+    map.set(key, merged);
+  }
+
+  return sortMatches([...map.values()]);
+}
+
+function buildRapidApiCandidateUrls(dateYmd) {
+  const base = `https://${RAPIDAPI_HOST}`;
+
+  const paths = [
+    RAPIDAPI_MATCHES_BY_DATE_PATH,
+    `/matches-by-date?date=${dateYmd}`,
+    `/matches/events-by-date?date=${dateYmd}`,
+    `/matches-events-by-date?date=${dateYmd}`,
+    `/matches?date=${dateYmd}`,
+    `/events-by-date?date=${dateYmd}`,
+    `/events?date=${dateYmd}`,
+    `/football/matches-by-date?date=${dateYmd}`,
+    `/football/events-by-date?date=${dateYmd}`,
+    `/get-matches-by-date?date=${dateYmd}`,
+    `/get-matches-events-by-date?date=${dateYmd}`
+  ]
+    .map((x) => cleanText(x))
+    .filter(Boolean)
+    .map((p) => {
+      const normalized = p.includes("{date}") ? p.replaceAll("{date}", dateYmd) : p;
+      return normalized.startsWith("http") ? normalized : `${base}${normalized.startsWith("/") ? "" : "/"}${normalized}`;
+    });
+
+  return [...new Set(paths)];
+}
+
+async function fetchMatchesForDateFromRapidApi(dateYmd) {
+  if (!RAPIDAPI_KEY || !RAPIDAPI_HOST) {
+    throw new Error("RapidAPI env eksik");
+  }
+
+  const urls = buildRapidApiCandidateUrls(dateYmd);
+  let lastError = null;
+
+  for (const url of urls) {
+    try {
+      console.log("Trying RapidAPI URL:", url);
+
+      const data = await fetchJson(
+        url,
+        {
+          headers: {
+            "x-rapidapi-key": RAPIDAPI_KEY,
+            "x-rapidapi-host": RAPIDAPI_HOST
+          }
+        },
+        20000
+      );
+
+      const items = pickRapidApiItems(data);
+      console.log("RapidAPI raw item count:", items.length);
+
+      const normalized = items
+        .map((m) => normalizeRapidApiMatch(m))
+        .filter(Boolean)
+        .filter((m) => m.trDate === dateYmd);
+
+      console.log("RapidAPI normalized count:", normalized.length);
+
+      if (normalized.length > 0) {
+        return {
+          provider: "rapidapi",
+          matches: dedupeMatches(normalized),
+          debugUrl: url
+        };
+      }
+
+      // Bazen cevap 200 doner ama parse edilmeyen format olabilir
+      // yine de devam edip diger olasi pathleri deneyelim
+      lastError = new Error(`RapidAPI 200 dondu ama parse edilmis mac yok: ${url}`);
+    } catch (error) {
+      console.error("RapidAPI source failed:", error.message);
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error("RapidAPI kaynagi basarisiz");
+}
+
+/* =========================================================
+   FOOTBALL-DATA HELPERS
+========================================================= */
 
 function filterLeagueMode(matches, leagueMode, customLeagues) {
   if (leagueMode === "major") {
@@ -328,6 +731,10 @@ async function fetchMatchesForDateRangeFromFootballDataCompetitions(dateFrom, da
   };
 }
 
+/* =========================================================
+   FIXTURE SOURCE ORCHESTRATION
+========================================================= */
+
 async function getMatchesWithCache(dateFrom, dateTo) {
   const cacheKey = `range_${dateFrom}_${dateTo}`;
 
@@ -344,24 +751,38 @@ async function getMatchesWithCache(dateFrom, dateTo) {
     };
   }
 
-  console.log("Fixture cache miss or empty cache, fetching live competition sources...");
+  console.log("Fixture cache miss, fetching RapidAPI + football-data...");
 
-  let result = {
-    provider: "none",
-    matches: []
-  };
+  let rapidResult = { provider: "rapidapi-failed", matches: [] };
+  let footballResult = { provider: "football-data-failed", matches: [] };
 
   try {
-    result = await fetchMatchesForDateRangeFromFootballDataCompetitions(dateFrom, dateTo);
+    rapidResult = await fetchMatchesForDateFromRapidApi(dateFrom);
   } catch (error) {
-    console.error("Competition aggregate source fail:", error.message);
+    console.error("RapidAPI main source fail:", error.message);
   }
 
-  if (Array.isArray(result.matches) && result.matches.length > 0) {
+  try {
+    footballResult = await fetchMatchesForDateRangeFromFootballDataCompetitions(dateFrom, dateTo);
+  } catch (error) {
+    console.error("Football-data backup fail:", error.message);
+  }
+
+  const merged = mergeMatchSources(
+    Array.isArray(rapidResult.matches) ? rapidResult.matches : [],
+    Array.isArray(footballResult.matches) ? footballResult.matches : []
+  );
+
+  let provider = "none";
+  if (rapidResult.matches.length && footballResult.matches.length) provider = "rapidapi+football-data";
+  else if (rapidResult.matches.length) provider = "rapidapi";
+  else if (footballResult.matches.length) provider = "football-data-competitions";
+
+  if (merged.length > 0) {
     CACHE.fixture.key = cacheKey;
     CACHE.fixture.expiresAt = nowTs() + CACHE_TTL.fixtureMs;
-    CACHE.fixture.data = result.matches;
-    console.log("Fixture cache updated with matches:", result.matches.length);
+    CACHE.fixture.data = merged;
+    console.log("Fixture cache updated with matches:", merged.length);
   } else {
     CACHE.fixture.key = "";
     CACHE.fixture.expiresAt = 0;
@@ -369,13 +790,22 @@ async function getMatchesWithCache(dateFrom, dateTo) {
     console.log("No matches found, empty result NOT cached.");
   }
 
-  return result;
+  return {
+    provider,
+    matches: merged
+  };
 }
 
 async function fetchCompetitionStandings(code) {
   const cacheKey = `standings_${code}`;
   const cached = cacheGet(CACHE.standings, cacheKey);
   if (cached) return cached;
+
+  if (!code || !FOOTBALL_DATA_API_KEY) {
+    const empty = {};
+    cacheSet(CACHE.standings, cacheKey, empty, 2 * 60 * 1000);
+    return empty;
+  }
 
   const url = `https://api.football-data.org/v4/competitions/${encodeURIComponent(code)}/standings`;
   try {
@@ -487,7 +917,7 @@ function extractResultFromTeamPerspective(match, teamId) {
 }
 
 async function fetchTeamRecentMatches(teamId, dateTo, limit = 10) {
-  if (!teamId) return [];
+  if (!teamId || !FOOTBALL_DATA_API_KEY) return [];
 
   const cacheKey = `team_${teamId}_${dateTo}_${limit}`;
   const cached = cacheGet(CACHE.teamMatches, cacheKey);
@@ -569,7 +999,7 @@ function buildRecentTeamStats(teamMatches, teamId) {
 }
 
 async function fetchMatchH2H(matchId) {
-  if (!matchId) return null;
+  if (!matchId || !FOOTBALL_DATA_API_KEY) return null;
 
   const cacheKey = `h2h_${matchId}`;
   const cached = cacheGet(CACHE.h2h, cacheKey);
@@ -671,7 +1101,7 @@ async function enrichMatch(match) {
   const [homeRecent, awayRecent, h2hData] = await Promise.all([
     fetchTeamRecentMatches(match.homeTeamId, dateTo, 10),
     fetchTeamRecentMatches(match.awayTeamId, dateTo, 10),
-    fetchMatchH2H(match.rawMatchId)
+    match.provider === "football-data" && match.rawMatchId ? fetchMatchH2H(match.rawMatchId) : Promise.resolve(null)
   ]);
 
   const homeRecentStats = buildRecentTeamStats(homeRecent, match.homeTeamId);
@@ -1081,6 +1511,9 @@ app.get("/health", (req, res) => {
     status: "running",
     openai: !!openai,
     footballDataConfigured: !!FOOTBALL_DATA_API_KEY,
+    rapidApiConfigured: !!RAPIDAPI_KEY,
+    rapidApiHost: RAPIDAPI_HOST || null,
+    rapidApiCustomPath: RAPIDAPI_MATCHES_BY_DATE_PATH || null,
     cacheActive: true,
     competitions: DEFAULT_COMPETITION_CODES,
     cacheInfo: {
