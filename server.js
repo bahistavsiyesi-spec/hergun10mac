@@ -1,962 +1,374 @@
-<!DOCTYPE html>
-<html lang="tr">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Bahis Asistanı Pro</title>
-  <style>
-    :root{
-      --bg:#060816;
-      --bg2:#0b1022;
-      --card:#111733;
-      --card2:#151d3f;
-      --line:rgba(255,255,255,.08);
-      --text:#edf2ff;
-      --muted:#9aa5c3;
-      --green:#00f28a;
-      --green2:#0ad16f;
-      --yellow:#ffd54a;
-      --red:#ff5c74;
-      --blue:#4fc3f7;
-      --purple:#b39ddb;
-    }
-
-    *{box-sizing:border-box}
-    html{scroll-behavior:smooth}
-    body{
-      margin:0;
-      font-family:Arial, Helvetica, sans-serif;
-      color:var(--text);
-      background:
-        radial-gradient(circle at 15% 10%, rgba(0,242,138,.08), transparent 28%),
-        radial-gradient(circle at 85% 15%, rgba(79,195,247,.08), transparent 22%),
-        linear-gradient(180deg, #050814 0%, #080b1e 100%);
-      min-height:100vh;
-    }
-
-    .container{
-      width:min(1120px, calc(100% - 28px));
-      margin:0 auto;
-      padding:26px 0 60px;
-    }
-
-    .topbar{
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:16px;
-      flex-wrap:wrap;
-      margin-bottom:22px;
-    }
-
-    .brand{
-      display:flex;
-      align-items:center;
-      gap:14px;
-    }
-
-    .brand-icon{
-      width:52px;
-      height:52px;
-      border-radius:16px;
-      display:grid;
-      place-items:center;
-      background:linear-gradient(135deg, rgba(0,242,138,.16), rgba(0,242,138,.06));
-      border:1px solid rgba(0,242,138,.2);
-      font-size:28px;
-      box-shadow:0 0 20px rgba(0,242,138,.12);
-    }
-
-    .brand h1{
-      margin:0;
-      font-size:26px;
-      line-height:1.1;
-      color:var(--green);
-    }
-
-    .brand p{
-      margin:4px 0 0;
-      color:var(--muted);
-      font-size:13px;
-    }
-
-    .meta{
-      display:flex;
-      gap:10px;
-      flex-wrap:wrap;
-    }
-
-    .meta-box{
-      background:rgba(255,255,255,.03);
-      border:1px solid var(--line);
-      border-radius:14px;
-      padding:10px 14px;
-      min-width:150px;
-    }
-
-    .meta-box .label{
-      color:var(--muted);
-      font-size:11px;
-      margin-bottom:4px;
-      text-transform:uppercase;
-      letter-spacing:.8px;
-    }
-
-    .meta-box .value{
-      color:var(--yellow);
-      font-weight:700;
-      font-size:13px;
-    }
-
-    .panel{
-      background:linear-gradient(180deg, rgba(17,23,51,.96), rgba(12,16,36,.96));
-      border:1px solid var(--line);
-      border-radius:20px;
-      padding:20px;
-      box-shadow:0 14px 40px rgba(0,0,0,.24);
-      margin-bottom:18px;
-    }
-
-    .panel-title{
-      margin:0 0 14px;
-      font-size:20px;
-      color:var(--green);
-    }
-
-    .controls{
-      display:grid;
-      grid-template-columns:1.1fr .9fr;
-      gap:18px;
-    }
-
-    .field{
-      margin-bottom:12px;
-    }
-
-    .field label{
-      display:block;
-      font-size:12px;
-      color:var(--muted);
-      margin-bottom:6px;
-      text-transform:uppercase;
-      letter-spacing:.8px;
-    }
-
-    .field input,
-    .field select,
-    .field textarea{
-      width:100%;
-      border:1px solid var(--line);
-      background:rgba(255,255,255,.03);
-      color:var(--text);
-      border-radius:12px;
-      padding:12px 14px;
-      outline:none;
-      font-size:14px;
-    }
-
-    .field textarea{
-      min-height:132px;
-      resize:vertical;
-    }
-
-    .row2{
-      display:grid;
-      grid-template-columns:1fr 1fr;
-      gap:12px;
-    }
-
-    .help{
-      color:var(--muted);
-      font-size:12px;
-      line-height:1.5;
-      margin-top:6px;
-    }
-
-    .actions{
-      display:flex;
-      gap:12px;
-      flex-wrap:wrap;
-      margin-top:8px;
-    }
-
-    .btn{
-      border:none;
-      cursor:pointer;
-      border-radius:14px;
-      padding:15px 22px;
-      font-size:15px;
-      font-weight:700;
-      transition:.2s ease;
-    }
-
-    .btn-primary{
-      background:linear-gradient(135deg, var(--green), var(--green2));
-      color:#04120a;
-      box-shadow:0 10px 24px rgba(0,242,138,.18);
-    }
-
-    .btn-secondary{
-      background:rgba(255,255,255,.04);
-      color:var(--text);
-      border:1px solid var(--line);
-    }
-
-    .btn:hover{transform:translateY(-1px)}
-    .btn:disabled{opacity:.6; cursor:not-allowed; transform:none}
-
-    .status-box,
-    .error-box{
-      display:none;
-      border-radius:16px;
-      padding:16px 18px;
-      margin-bottom:18px;
-      border:1px solid var(--line);
-    }
-
-    .status-box.active{
-      display:block;
-      background:rgba(0,242,138,.06);
-      border-color:rgba(0,242,138,.18);
-    }
-
-    .error-box.active{
-      display:block;
-      background:rgba(255,92,116,.08);
-      border-color:rgba(255,92,116,.22);
-      color:#ffd7de;
-    }
-
-    .loading-steps{
-      list-style:none;
-      padding:0;
-      margin:12px 0 0;
-      display:grid;
-      gap:8px;
-    }
-
-    .loading-steps li{
-      border:1px solid var(--line);
-      border-radius:12px;
-      padding:10px 12px;
-      color:var(--muted);
-      background:rgba(255,255,255,.02);
-    }
-
-    .loading-steps li.active{
-      color:var(--text);
-      border-color:rgba(255,213,74,.28);
-    }
-
-    .loading-steps li.done{
-      color:var(--green);
-      border-color:rgba(0,242,138,.22);
-    }
-
-    .grid{
-      display:grid;
-      grid-template-columns:2fr 1fr;
-      gap:18px;
-      align-items:start;
-    }
-
-    .section-head{
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:12px;
-      flex-wrap:wrap;
-      margin-bottom:14px;
-    }
-
-    .section-title{
-      margin:0;
-      font-size:22px;
-      color:var(--green);
-    }
-
-    .pill{
-      display:inline-flex;
-      align-items:center;
-      gap:8px;
-      background:rgba(0,242,138,.09);
-      color:var(--green);
-      border:1px solid rgba(0,242,138,.2);
-      border-radius:999px;
-      padding:8px 12px;
-      font-size:12px;
-      font-weight:700;
-    }
-
-    .tips-list{
-      display:grid;
-      gap:16px;
-    }
-
-    .tip-card{
-      background:linear-gradient(180deg, rgba(17,23,51,.98), rgba(12,16,36,.98));
-      border:1px solid var(--line);
-      border-radius:18px;
-      overflow:hidden;
-      box-shadow:0 10px 28px rgba(0,0,0,.18);
-    }
-
-    .tip-top{
-      padding:16px 18px;
-      border-bottom:1px solid var(--line);
-      display:flex;
-      justify-content:space-between;
-      gap:12px;
-      flex-wrap:wrap;
-      align-items:flex-start;
-    }
-
-    .match-name{
-      font-size:18px;
-      font-weight:700;
-      margin:0;
-    }
-
-    .match-sub{
-      margin-top:5px;
-      color:var(--muted);
-      font-size:13px;
-    }
-
-    .badges{
-      display:flex;
-      flex-wrap:wrap;
-      gap:8px;
-    }
-
-    .badge{
-      padding:7px 10px;
-      border-radius:999px;
-      font-size:11px;
-      font-weight:700;
-      border:1px solid transparent;
-      white-space:nowrap;
-    }
-
-    .badge-green{
-      background:rgba(0,242,138,.12);
-      color:var(--green);
-      border-color:rgba(0,242,138,.2);
-    }
-
-    .badge-yellow{
-      background:rgba(255,213,74,.12);
-      color:var(--yellow);
-      border-color:rgba(255,213,74,.2);
-    }
-
-    .badge-red{
-      background:rgba(255,92,116,.12);
-      color:var(--red);
-      border-color:rgba(255,92,116,.2);
-    }
-
-    .badge-blue{
-      background:rgba(79,195,247,.12);
-      color:var(--blue);
-      border-color:rgba(79,195,247,.2);
-    }
-
-    .tip-body{
-      padding:16px 18px 18px;
-      display:grid;
-      grid-template-columns:1.05fr .95fr;
-      gap:16px;
-    }
-
-    .box{
-      background:rgba(255,255,255,.02);
-      border:1px solid var(--line);
-      border-radius:14px;
-      padding:14px;
-    }
-
-    .box-title{
-      font-size:12px;
-      color:var(--muted);
-      text-transform:uppercase;
-      letter-spacing:.8px;
-      margin-bottom:10px;
-    }
-
-    .prob-row{
-      display:grid;
-      grid-template-columns:150px 1fr 48px;
-      gap:10px;
-      align-items:center;
-      margin-bottom:10px;
-      font-size:13px;
-    }
-
-    .bar{
-      height:9px;
-      background:rgba(255,255,255,.06);
-      border-radius:999px;
-      overflow:hidden;
-    }
-
-    .bar-fill{
-      height:100%;
-      border-radius:999px;
-    }
-
-    .mono{
-      font-family:monospace;
-      font-weight:700;
-    }
-
-    .stats-mini{
-      display:grid;
-      grid-template-columns:repeat(2,1fr);
-      gap:10px;
-      margin-top:10px;
-    }
-
-    .mini{
-      background:rgba(255,255,255,.025);
-      border:1px solid var(--line);
-      border-radius:12px;
-      padding:10px 11px;
-    }
-
-    .mini-label{
-      color:var(--muted);
-      font-size:11px;
-      margin-bottom:5px;
-      text-transform:uppercase;
-      letter-spacing:.7px;
-    }
-
-    .mini-value{
-      font-size:13px;
-      line-height:1.45;
-    }
-
-    .reason-list{
-      display:grid;
-      gap:8px;
-    }
-
-    .reason{
-      font-size:13px;
-      line-height:1.5;
-      padding:10px 11px;
-      border-radius:12px;
-      border:1px solid var(--line);
-      background:rgba(255,255,255,.02);
-    }
-
-    .coupon-panel{
-      position:sticky;
-      top:14px;
-    }
-
-    .coupon-card{
-      background:linear-gradient(180deg, rgba(17,23,51,.98), rgba(12,16,36,.98));
-      border:1px solid var(--line);
-      border-radius:18px;
-      padding:16px;
-      margin-bottom:14px;
-    }
-
-    .coupon-card h3{
-      margin:0 0 12px;
-      font-size:18px;
-      color:var(--green);
-    }
-
-    .coupon-list{
-      display:grid;
-      gap:10px;
-    }
-
-    .coupon-item{
-      border:1px solid var(--line);
-      border-radius:12px;
-      padding:11px 12px;
-      background:rgba(255,255,255,.025);
-    }
-
-    .coupon-item strong{
-      display:block;
-      font-size:13px;
-      margin-bottom:4px;
-      line-height:1.4;
-    }
-
-    .coupon-meta{
-      color:var(--muted);
-      font-size:12px;
-      line-height:1.45;
-    }
-
-    .footer-note{
-      margin-top:8px;
-      color:var(--muted);
-      font-size:12px;
-      line-height:1.6;
-    }
-
-    .empty{
-      padding:24px;
-      text-align:center;
-      color:var(--muted);
-      border:1px dashed var(--line);
-      border-radius:16px;
-      background:rgba(255,255,255,.02);
-    }
-
-    @media (max-width: 980px){
-      .controls,
-      .grid,
-      .tip-body{
-        grid-template-columns:1fr;
-      }
-      .coupon-panel{
-        position:static;
-      }
-    }
-
-    @media (max-width: 640px){
-      .container{
-        width:min(100% - 18px, 1120px);
-      }
-      body{
-        padding:0;
-      }
-      .prob-row{
-        grid-template-columns:1fr;
-      }
-      .stats-mini{
-        grid-template-columns:1fr;
-      }
-      .row2{
-        grid-template-columns:1fr;
-      }
-      .topbar{
-        align-items:flex-start;
-      }
-      .brand h1{
-        font-size:23px;
-      }
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-
-    <div class="topbar">
-      <div class="brand">
-        <div class="brand-icon">⚽</div>
-        <div>
-          <h1>Bahis Asistanı Pro</h1>
-          <p>Gerçek form verisi · AI risk skoru · otomatik kupon</p>
-        </div>
-      </div>
-
-      <div class="meta">
-        <div class="meta-box">
-          <div class="label">Tarih</div>
-          <div class="value" id="todayLabel">—</div>
-        </div>
-        <div class="meta-box">
-          <div class="label">Backend</div>
-          <div class="value">Render aktif</div>
-        </div>
-      </div>
-    </div>
-
-    <section class="panel">
-      <h2 class="panel-title">Analiz Motoru Ayarları</h2>
-
-      <div class="controls">
-        <div>
-          <div class="field">
-            <label>Backend endpoint</label>
-            <input id="apiUrl" value="https://hergun10mac.onrender.com/analyze" />
-            <div class="help">Bu alan hazır geliyor. İstersen backend adresini sonradan değiştirebilirsin.</div>
-          </div>
-
-          <div class="field">
-            <label>Ek analiz notu</label>
-            <textarea id="extraPrompt">Analiz aşamasında özellikle son form, gol ortalamaları, H2H özeti, risk seviyesi ve kupon uygunluğu dikkate alınsın.</textarea>
-          </div>
-        </div>
-
-        <div>
-          <div class="row2">
-            <div class="field">
-              <label>Lig filtresi</label>
-              <select id="leagueMode">
-                <option value="all">Tüm ligler</option>
-                <option value="major">Büyük ligler</option>
-                <option value="custom">Özel lig</option>
-              </select>
-            </div>
-
-            <div class="field">
-              <label>Maç sayısı</label>
-              <select id="matchLimit">
-                <option value="5">5</option>
-                <option value="8">8</option>
-                <option value="10" selected>10</option>
-                <option value="12">12</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="field">
-            <label>Özel ligler</label>
-            <input id="customLeagues" placeholder="Serie A, Premier League, La Liga" />
-          </div>
-
-          <div class="actions">
-            <button class="btn btn-primary" id="analyzeBtn">⚡ Derin Analiz Başlat</button>
-            <button class="btn btn-secondary" id="scrollCouponBtn">🎯 Kuponlara Git</button>
-          </div>
-
-          <div class="footer-note">
-            Sistem önce backend verisini toplar, sonra AI destekli analiz üretir. AI boş dönerse güvenli yedek analiz gösterilir.
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <div class="status-box" id="statusBox">
-      <strong>Analiz hazırlanıyor...</strong>
-      <ul class="loading-steps">
-        <li id="s1">Günün maçları çekiliyor</li>
-        <li id="s2">Takım form verileri işleniyor</li>
-        <li id="s3">H2H ve risk hesapları hazırlanıyor</li>
-        <li id="s4">AI değerlendirmesi yapılıyor</li>
-        <li id="s5">Kuponlar ve kartlar oluşturuluyor</li>
-      </ul>
-    </div>
-
-    <div class="error-box" id="errorBox"></div>
-
-    <div class="grid">
-      <section class="panel">
-        <div class="section-head">
-          <h2 class="section-title">Maç Analizleri</h2>
-          <div class="pill" id="countPill">0 maç</div>
-        </div>
-
-        <div id="tipsList" class="tips-list">
-          <div class="empty">Henüz analiz başlatılmadı.</div>
-        </div>
-      </section>
-
-      <aside class="coupon-panel" id="couponPanel">
-        <div class="coupon-card">
-          <h3>🔥 En Güvenli Kupon</h3>
-          <div id="couponSafest" class="coupon-list">
-            <div class="empty">Kupon verisi bekleniyor.</div>
-          </div>
-        </div>
-
-        <div class="coupon-card">
-          <h3>⚖️ Dengeli Kupon</h3>
-          <div id="couponBalanced" class="coupon-list">
-            <div class="empty">Kupon verisi bekleniyor.</div>
-          </div>
-        </div>
-
-        <div class="coupon-card">
-          <h3>🎲 Sürpriz Kupon</h3>
-          <div id="couponSurprise" class="coupon-list">
-            <div class="empty">Kupon verisi bekleniyor.</div>
-          </div>
-        </div>
-      </aside>
-    </div>
-  </div>
-
-  <script>
-    const analyzeBtn = document.getElementById("analyzeBtn");
-    const scrollCouponBtn = document.getElementById("scrollCouponBtn");
-    const statusBox = document.getElementById("statusBox");
-    const errorBox = document.getElementById("errorBox");
-    const tipsList = document.getElementById("tipsList");
-    const countPill = document.getElementById("countPill");
-    const todayLabel = document.getElementById("todayLabel");
-
-    function setToday() {
-      const d = new Date();
-      todayLabel.textContent = d.toLocaleDateString("tr-TR", {
-        weekday: "long",
-        day: "numeric",
-        month: "long",
-        year: "numeric"
-      });
-    }
-
-    setToday();
-
-    function setStep(id, state) {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.classList.remove("active", "done");
-      if (state) el.classList.add(state);
-    }
-
-    function resetSteps() {
-      ["s1","s2","s3","s4","s5"].forEach(id => setStep(id, ""));
-    }
-
-    function playSteps() {
-      const delays = [0, 1200, 2600, 4200, 5800];
-      delays.forEach((delay, index) => {
-        setTimeout(() => {
-          if (index > 0) setStep("s" + index, "done");
-          setStep("s" + (index + 1), "active");
-        }, delay);
-      });
-    }
-
-    function escapeHtml(value) {
-      return String(value ?? "")
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#39;");
-    }
-
-    function getRiskBadge(text) {
-      const t = String(text || "").toLowerCase();
-      if (t.includes("yüksek risk")) return { cls: "badge-red", label: text };
-      if (t.includes("orta risk")) return { cls: "badge-yellow", label: text };
-      return { cls: "badge-green", label: text || "Düşük Risk" };
-    }
-
-    function getConfidenceBadge(text) {
-      const t = String(text || "").toLowerCase();
-      if (t.includes("çok")) return { cls: "badge-blue", label: text };
-      if (t.includes("yüksek")) return { cls: "badge-green", label: text };
-      if (t.includes("orta")) return { cls: "badge-yellow", label: text };
-      return { cls: "badge-red", label: text || "Düşük" };
-    }
-
-    function probColor(value) {
-      if (value >= 70) return "linear-gradient(90deg, #00f28a, #13d676)";
-      if (value >= 50) return "linear-gradient(90deg, #ffd54a, #ffb74d)";
-      return "linear-gradient(90deg, #ff5c74, #ff7e5f)";
-    }
-
-    function renderCoupons(coupons) {
-      renderCouponList("couponSafest", coupons?.safest || []);
-      renderCouponList("couponBalanced", coupons?.balanced || []);
-      renderCouponList("couponSurprise", coupons?.surprise || []);
-    }
-
-    function renderCouponList(targetId, items) {
-      const el = document.getElementById(targetId);
-      if (!el) return;
-
-      if (!items.length) {
-        el.innerHTML = `<div class="empty">Kupon verisi bulunamadı.</div>`;
-        return;
-      }
-
-      el.innerHTML = items.map(item => `
-        <div class="coupon-item">
-          <strong>${escapeHtml(item.match || "Maç yok")}</strong>
-          <div class="coupon-meta">
-            Öneri: ${escapeHtml(item.bet || "—")}<br>
-            Güven: ${escapeHtml(item.confidence || "—")}
-            ${item.risk ? `<br>Risk: ${escapeHtml(item.risk)}` : ""}
-          </div>
-        </div>
-      `).join("");
-    }
-
-    function renderTips(tips) {
-      if (!Array.isArray(tips) || !tips.length) {
-        tipsList.innerHTML = `<div class="empty">Uygun maç bulunamadı.</div>`;
-        countPill.textContent = "0 maç";
-        return;
-      }
-
-      countPill.textContent = `${tips.length} maç`;
-
-      tipsList.innerHTML = tips.map((tip, index) => {
-        const conf = getConfidenceBadge(tip.confidence);
-        const risk = getRiskBadge(tip.risk_note);
-        const over25 = Number(tip.prob_over25 || 0);
-        const firstHalf = Number(tip.prob_first_half_2plus || 0);
-        const btts = Number(tip.prob_btts || 0);
-
-        return `
-          <article class="tip-card">
-            <div class="tip-top">
-              <div>
-                <h3 class="match-name">${index === 0 ? "🔥 " : ""}${escapeHtml(tip.match)}</h3>
-                <div class="match-sub">
-                  ${escapeHtml(tip.league)} • ${escapeHtml(tip.time)} • ${escapeHtml(tip.match_importance || "Normal")}
-                </div>
-              </div>
-
-              <div class="badges">
-                <span class="badge ${conf.cls}">Güven: ${escapeHtml(conf.label)}</span>
-                <span class="badge ${risk.cls}">${escapeHtml(risk.label)}</span>
-                <span class="badge badge-blue">Tahmin: ${escapeHtml(tip.result_prediction || "—")}</span>
-                <span class="badge badge-yellow">Skor: ${escapeHtml(tip.score_prediction || "—")}</span>
-              </div>
-            </div>
-
-            <div class="tip-body">
-              <div class="box">
-                <div class="box-title">Olasılık Analizi</div>
-
-                <div class="prob-row">
-                  <div>2.5 Gol Üstü</div>
-                  <div class="bar"><div class="bar-fill" style="width:${over25}%; background:${probColor(over25)}"></div></div>
-                  <div class="mono">%${over25}</div>
-                </div>
-
-                <div class="prob-row">
-                  <div>İlk Yarı 2+ Gol</div>
-                  <div class="bar"><div class="bar-fill" style="width:${firstHalf}%; background:${probColor(firstHalf)}"></div></div>
-                  <div class="mono">%${firstHalf}</div>
-                </div>
-
-                <div class="prob-row">
-                  <div>KG Var</div>
-                  <div class="bar"><div class="bar-fill" style="width:${btts}%; background:${probColor(btts)}"></div></div>
-                  <div class="mono">%${btts}</div>
-                </div>
-
-                <div class="stats-mini">
-                  <div class="mini">
-                    <div class="mini-label">Önerilen Bahis</div>
-                    <div class="mini-value">${escapeHtml(tip.recommended_bet || "—")}</div>
-                  </div>
-
-                  <div class="mini">
-                    <div class="mini-label">H2H Özeti</div>
-                    <div class="mini-value">${escapeHtml(tip.h2h_summary || "—")}</div>
-                  </div>
-
-                  <div class="mini">
-                    <div class="mini-label">Ev Formu</div>
-                    <div class="mini-value">${escapeHtml(tip.home_form || "—")}</div>
-                  </div>
-
-                  <div class="mini">
-                    <div class="mini-label">Dep Formu</div>
-                    <div class="mini-value">${escapeHtml(tip.away_form || "—")}</div>
-                  </div>
-
-                  <div class="mini">
-                    <div class="mini-label">Ev Gol Ort.</div>
-                    <div class="mini-value">${escapeHtml(tip.home_goals_avg || "—")} / Yediği ${escapeHtml(tip.home_conceded_avg || "—")}</div>
-                  </div>
-
-                  <div class="mini">
-                    <div class="mini-label">Dep Gol Ort.</div>
-                    <div class="mini-value">${escapeHtml(tip.away_goals_avg || "—")} / Yediği ${escapeHtml(tip.away_conceded_avg || "—")}</div>
-                  </div>
-
-                  <div class="mini">
-                    <div class="mini-label">Ev Performansı</div>
-                    <div class="mini-value">${escapeHtml(tip.home_performance || "—")}</div>
-                  </div>
-
-                  <div class="mini">
-                    <div class="mini-label">Dep Performansı</div>
-                    <div class="mini-value">${escapeHtml(tip.away_performance || "—")}</div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="box">
-                <div class="box-title">Kısa Analiz ve Risk</div>
-
-                <div class="reason-list">
-                  ${(Array.isArray(tip.reasons) ? tip.reasons : []).map(r => `
-                    <div class="reason">🧠 ${escapeHtml(r)}</div>
-                  `).join("")}
-
-                  <div class="reason">📊 Lig / tablo bağlamı: ${escapeHtml(tip.table_context || "Veri yok")}</div>
-                  <div class="reason">⚠️ Risk notu: ${escapeHtml(tip.risk_note || "Yok")}</div>
-                </div>
-              </div>
-            </div>
-          </article>
-        `;
-      }).join("");
-    }
-
-    function buildPayload() {
-      const leagueMode = document.getElementById("leagueMode").value;
-      const customLeagues = document.getElementById("customLeagues").value
-        .split(",")
-        .map(x => x.trim())
-        .filter(Boolean);
-
-      return {
-        match_limit: Number(document.getElementById("matchLimit").value),
-        league_mode: leagueMode,
-        custom_leagues: leagueMode === "custom" ? customLeagues : [],
-        extra_prompt: document.getElementById("extraPrompt").value.trim()
-      };
-    }
-
-    async function analyze() {
-      analyzeBtn.disabled = true;
-      errorBox.classList.remove("active");
-      errorBox.textContent = "";
-      statusBox.classList.add("active");
-      resetSteps();
-      playSteps();
-
-      try {
-        const apiUrl = document.getElementById("apiUrl").value.trim();
-        if (!apiUrl) throw new Error("Backend endpoint alanı boş.");
-
-        const response = await fetch(apiUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(buildPayload())
-        });
-
-        if (!response.ok) {
-          const text = await response.text();
-          throw new Error(`Sunucu hatası (${response.status}): ${text.slice(0, 250)}`);
-        }
-
-        const data = await response.json();
-
-        ["s1","s2","s3","s4","s5"].forEach(id => setStep(id, "done"));
-
-        setTimeout(() => {
-          statusBox.classList.remove("active");
-          renderTips(data.tips || []);
-          renderCoupons(data.coupons || {});
-        }, 400);
-
-      } catch (err) {
-        statusBox.classList.remove("active");
-        errorBox.textContent = "⚠️ " + (err?.message || "Bilinmeyen hata");
-        errorBox.classList.add("active");
-      } finally {
-        analyzeBtn.disabled = false;
-      }
-    }
-
-    analyzeBtn.addEventListener("click", analyze);
-
-    scrollCouponBtn.addEventListener("click", () => {
-      document.getElementById("couponPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import OpenAI from "openai";
+
+dotenv.config();
+
+const app = express();
+
+app.use(cors());
+app.use(express.json({ limit: "1mb" }));
+
+const PORT = process.env.PORT || 3000;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+
+const openai = OPENAI_API_KEY
+  ? new OpenAI({ apiKey: OPENAI_API_KEY })
+  : null;
+
+const MAJOR_LEAGUES = [
+  "Premier League",
+  "La Liga",
+  "Serie A",
+  "Bundesliga",
+  "Ligue 1",
+  "Super Lig",
+  "Süper Lig",
+  "Champions League",
+  "Europa League",
+  "Conference League",
+  "Eredivisie",
+  "Primeira Liga"
+];
+
+const ALL_MATCHES = [
+  { id: 1, match: "Galatasaray vs Antalyaspor", league: "Super Lig", time: "20:00" },
+  { id: 2, match: "Fenerbahce vs Konyaspor", league: "Super Lig", time: "19:00" },
+  { id: 3, match: "Besiktas vs Kasimpasa", league: "Super Lig", time: "21:00" },
+  { id: 4, match: "Trabzonspor vs Alanyaspor", league: "Super Lig", time: "18:00" },
+  { id: 5, match: "Manchester City vs Brighton", league: "Premier League", time: "22:00" },
+  { id: 6, match: "Liverpool vs Wolves", league: "Premier League", time: "19:30" },
+  { id: 7, match: "Arsenal vs Brentford", league: "Premier League", time: "18:30" },
+  { id: 8, match: "Real Madrid vs Getafe", league: "La Liga", time: "23:00" },
+  { id: 9, match: "Barcelona vs Sevilla", league: "La Liga", time: "20:30" },
+  { id: 10, match: "Atletico Madrid vs Valencia", league: "La Liga", time: "22:30" },
+  { id: 11, match: "Inter vs Torino", league: "Serie A", time: "21:45" },
+  { id: 12, match: "Juventus vs Lecce", league: "Serie A", time: "20:00" },
+  { id: 13, match: "Milan vs Udinese", league: "Serie A", time: "19:45" },
+  { id: 14, match: "Bayern Munich vs Mainz", league: "Bundesliga", time: "18:30" },
+  { id: 15, match: "Dortmund vs Freiburg", league: "Bundesliga", time: "20:30" },
+  { id: 16, match: "PSG vs Rennes", league: "Ligue 1", time: "22:00" },
+  { id: 17, match: "Benfica vs Braga", league: "Primeira Liga", time: "23:15" },
+  { id: 18, match: "Ajax vs Utrecht", league: "Eredivisie", time: "21:00" },
+  { id: 19, match: "Porto vs Boavista", league: "Primeira Liga", time: "22:15" },
+  { id: 20, match: "AZ Alkmaar vs Twente", league: "Eredivisie", time: "20:45" }
+];
+
+function pickLeagueMatches(mode, customLeagues = []) {
+  if (mode === "major") {
+    return ALL_MATCHES.filter((m) => MAJOR_LEAGUES.some((l) => l.toLowerCase() === m.league.toLowerCase()));
+  }
+
+  if (mode === "custom" && Array.isArray(customLeagues) && customLeagues.length > 0) {
+    const wanted = customLeagues.map((x) => x.toLowerCase());
+    return ALL_MATCHES.filter((m) => wanted.some((w) => m.league.toLowerCase().includes(w)));
+  }
+
+  return ALL_MATCHES;
+}
+
+function rand(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function safePercent(n) {
+  return Math.max(5, Math.min(95, Math.round(n)));
+}
+
+function confidenceFromScore(score) {
+  if (score >= 80) return "Cok Yuksek";
+  if (score >= 68) return "Yuksek";
+  if (score >= 55) return "Orta";
+  return "Dusuk";
+}
+
+function riskFromScore(score) {
+  if (score >= 78) return "Dusuk risk";
+  if (score >= 58) return "Orta risk";
+  return "Yuksek risk";
+}
+
+function buildLocalTip(matchObj, extraPrompt = "") {
+  const homeStrength = rand(55, 90);
+  const awayStrength = rand(45, 82);
+  const formGap = homeStrength - awayStrength;
+
+  let resultPrediction = "X";
+  if (formGap >= 9) resultPrediction = "1";
+  else if (formGap <= -9) resultPrediction = "2";
+
+  const totalAttack = homeStrength + awayStrength;
+  const probOver25 = safePercent((totalAttack / 2) - 12 + rand(-8, 8));
+  const probBtts = safePercent(((awayStrength + homeStrength) / 2) - 18 + rand(-10, 10));
+  const probFirstHalf2Plus = safePercent((probOver25 * 0.62) + rand(-8, 8));
+
+  const combinedScore = Math.round(
+    (homeStrength * 0.32) +
+    ((100 - Math.abs(formGap) * 2) * 0.08) +
+    (probOver25 * 0.18) +
+    (probBtts * 0.12) +
+    (rand(52, 88) * 0.30)
+  );
+
+  const confidence = confidenceFromScore(combinedScore);
+  const riskNote = riskFromScore(combinedScore);
+
+  let recommendedBet = "Cifte Sans 1X";
+  if (resultPrediction === "1" && probOver25 >= 65) recommendedBet = "Mac Sonucu 1 ve 1.5 Ust";
+  else if (resultPrediction === "1") recommendedBet = "Mac Sonucu 1";
+  else if (resultPrediction === "2" && probOver25 >= 60) recommendedBet = "Mac Sonucu 2 veya 1.5 Ust";
+  else if (probBtts >= 62) recommendedBet = "KG Var";
+  else if (probOver25 >= 67) recommendedBet = "2.5 Ust";
+  else if (resultPrediction === "X") recommendedBet = "X veya 2.5 Alt";
+
+  let scorePrediction = "1-1";
+  if (resultPrediction === "1" && probOver25 >= 70) scorePrediction = "2-1";
+  else if (resultPrediction === "1" && probOver25 < 55) scorePrediction = "1-0";
+  else if (resultPrediction === "2" && probOver25 >= 68) scorePrediction = "1-2";
+  else if (resultPrediction === "2" && probOver25 < 55) scorePrediction = "0-1";
+  else if (probOver25 >= 72) scorePrediction = "2-2";
+
+  const homeGoalsAvg = (homeStrength / 40).toFixed(2);
+  const awayGoalsAvg = (awayStrength / 42).toFixed(2);
+  const homeConcededAvg = (rand(7, 18) / 10).toFixed(2);
+  const awayConcededAvg = (rand(8, 20) / 10).toFixed(2);
+
+  const homeWins = Math.max(1, Math.min(8, Math.round(homeStrength / 12)));
+  const awayWins = Math.max(1, Math.min(8, Math.round(awayStrength / 13)));
+
+  const homeForm = `Son 10 mac: ${homeWins}G ${rand(1, 3)}B ${rand(1, 4)}M`;
+  const awayForm = `Son 10 mac: ${awayWins}G ${rand(1, 3)}B ${rand(2, 5)}M`;
+
+  const homePerformance =
+    homeStrength >= 78 ? "Cok guclu" :
+    homeStrength >= 66 ? "Iyi" :
+    homeStrength >= 56 ? "Orta" : "Dalgalı";
+
+  const awayPerformance =
+    awayStrength >= 76 ? "Cok guclu" :
+    awayStrength >= 64 ? "Iyi" :
+    awayStrength >= 54 ? "Orta" : "Dalgalı";
+
+  const h2hSummary =
+    resultPrediction === "1" ? "Son karsilasmalarda ev sahibi bir adim onde." :
+    resultPrediction === "2" ? "Son karsilasmalarda deplasman ekibi surpriz yapabiliyor." :
+    "Iki takim arasindaki denge dikkat cekiyor.";
+
+  const tableContext =
+    resultPrediction === "1"
+      ? "Ev sahibi ust siralara yakin ve puan kaybina daha az toleransli."
+      : resultPrediction === "2"
+      ? "Deplasman ekibi form ivmesiyle puan arayacak."
+      : "Mac tablo dengesi acisindan kontrollu gecmeye uygun gorunuyor.";
+
+  const reasons = [
+    `Form farki ${Math.abs(formGap)} puan seviyesinde ve bu tahmini destekliyor.`,
+    `2.5 ust olasiligi %${probOver25}, KG Var olasiligi %${probBtts} olarak hesaplandi.`,
+    extraPrompt
+      ? `Ek not dikkate alindi: ${extraPrompt.slice(0, 110)}`
+      : "Risk hesaplamasinda form, gol ortalamasi ve mac dengesi birlikte degerlendirildi."
+  ];
+
+  return {
+    match: matchObj.match,
+    league: matchObj.league,
+    time: matchObj.time,
+    match_importance: rand(0, 1) ? "Yuksek" : "Normal",
+    confidence,
+    risk_note: riskNote,
+    result_prediction: resultPrediction,
+    score_prediction: scorePrediction,
+    prob_over25: probOver25,
+    prob_first_half_2plus: probFirstHalf2Plus,
+    prob_btts: probBtts,
+    recommended_bet: recommendedBet,
+    h2h_summary: h2hSummary,
+    home_form: homeForm,
+    away_form: awayForm,
+    home_goals_avg: homeGoalsAvg,
+    home_conceded_avg: homeConcededAvg,
+    away_goals_avg: awayGoalsAvg,
+    away_conceded_avg: awayConcededAvg,
+    home_performance: homePerformance,
+    away_performance: awayPerformance,
+    table_context: tableContext,
+    reasons
+  };
+}
+
+async function improveTipsWithOpenAI(tips, extraPrompt = "") {
+  if (!openai) {
+    return { tips, source: "fallback-basic" };
+  }
+
+  const prompt = `
+Sen profesyonel bir futbol analiz asistanisin.
+Aşağıdaki maç tahmin nesnelerini bozmadan daha profesyonel hale getir.
+Kurallar:
+- Sadece geçerli JSON döndür.
+- JSON formatı: { "tips": [...] }
+- Mevcut alanları koru.
+- "reasons" alanını 3 kısa ve net madde halinde iyileştir.
+- "confidence", "risk_note", "recommended_bet", "table_context", "h2h_summary", "score_prediction" alanlarını daha mantıklı hale getir.
+- Türkçe yaz ama ascii karakter kullan. Ornek: "Yuksek", "Dusuk risk".
+- Yeni alan ekleme.
+- Uydurma aşırı iddialardan kaçın.
+- Ek istek: ${extraPrompt || "yok"}
+
+Veri:
+${JSON.stringify(tips, null, 2)}
+`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.7,
+      messages: [
+        { role: "system", content: "You are a football betting analysis engine that returns only JSON." },
+        { role: "user", content: prompt }
+      ]
     });
-  </script>
-</body>
-</html>
+
+    const text = response.choices?.[0]?.message?.content || "";
+    const cleaned = text.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
+    const parsed = JSON.parse(cleaned);
+
+    if (parsed && Array.isArray(parsed.tips)) {
+      return { tips: parsed.tips, source: "openai" };
+    }
+
+    return { tips, source: "fallback-advanced" };
+  } catch (error) {
+    console.error("OpenAI fallback devrede:", error?.message || error);
+    return { tips, source: "fallback-advanced" };
+  }
+}
+
+function sortByStrength(tips) {
+  const scoreTip = (tip) => {
+    let score = 0;
+    score += Number(tip.prob_over25 || 0) * 0.20;
+    score += Number(tip.prob_btts || 0) * 0.12;
+    score += Number(tip.prob_first_half_2plus || 0) * 0.08;
+
+    const conf = String(tip.confidence || "").toLowerCase();
+    if (conf.includes("cok yuksek")) score += 35;
+    else if (conf.includes("yuksek")) score += 26;
+    else if (conf.includes("orta")) score += 16;
+    else score += 8;
+
+    const risk = String(tip.risk_note || "").toLowerCase();
+    if (risk.includes("dusuk")) score += 18;
+    else if (risk.includes("orta")) score += 10;
+    else score += 2;
+
+    return score;
+  };
+
+  return [...tips].sort((a, b) => scoreTip(b) - scoreTip(a));
+}
+
+function buildCoupons(tips) {
+  const sorted = sortByStrength(tips);
+
+  const safest = sorted.slice(0, 3).map((tip) => ({
+    match: tip.match,
+    bet: tip.recommended_bet,
+    confidence: tip.confidence,
+    risk: tip.risk_note
+  }));
+
+  const balanced = sorted.slice(1, 4).map((tip) => ({
+    match: tip.match,
+    bet:
+      Number(tip.prob_over25 || 0) >= 65
+        ? "2.5 Ust"
+        : Number(tip.prob_btts || 0) >= 60
+        ? "KG Var"
+        : tip.recommended_bet,
+    confidence: tip.confidence,
+    risk: tip.risk_note
+  }));
+
+  const surprise = sorted
+    .filter((tip) => String(tip.risk_note || "").toLowerCase().includes("orta") || String(tip.risk_note || "").toLowerCase().includes("yuksek"))
+    .slice(0, 3)
+    .map((tip) => ({
+      match: tip.match,
+      bet:
+        tip.result_prediction === "1"
+          ? "Skor 2-1"
+          : tip.result_prediction === "2"
+          ? "Skor 1-2"
+          : "KG Var",
+      confidence: tip.confidence,
+      risk: tip.risk_note
+    }));
+
+  return { safest, balanced, surprise };
+}
+
+app.get("/", (req, res) => {
+  res.json({
+    ok: true,
+    message: "Bahis Asistani Pro backend aktif",
+    endpoints: {
+      health: "/health",
+      analyze: "/analyze"
+    }
+  });
+});
+
+app.get("/health", (req, res) => {
+  res.json({
+    ok: true,
+    status: "running",
+    openai: !!openai
+  });
+});
+
+app.post("/analyze", async (req, res) => {
+  try {
+    const {
+      match_limit = 10,
+      league_mode = "all",
+      custom_leagues = [],
+      extra_prompt = ""
+    } = req.body || {};
+
+    const filteredMatches = pickLeagueMatches(league_mode, custom_leagues)
+      .slice(0, Math.max(1, Math.min(Number(match_limit) || 10, 20)));
+
+    const localTips = filteredMatches.map((m) => buildLocalTip(m, extra_prompt));
+    const improved = await improveTipsWithOpenAI(localTips, extra_prompt);
+    const finalTips = sortByStrength(improved.tips);
+    const coupons = buildCoupons(finalTips);
+
+    res.json({
+      ok: true,
+      source: improved.source,
+      total_matches: finalTips.length,
+      tips: finalTips,
+      coupons
+    });
+  } catch (error) {
+    console.error("Analyze error:", error);
+
+    res.status(500).json({
+      ok: false,
+      error: error?.message || "Sunucu hatasi"
+    });
+  }
+});
+
+app.use((req, res) => {
+  res.status(404).json({
+    ok: false,
+    error: "Endpoint bulunamadi"
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
