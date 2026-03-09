@@ -23,24 +23,23 @@ const RAPIDAPI_MATCHES_BY_DATE_PATH =
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
 /**
- * Not:
  * football-data planina gore bazi ligler farkli olabilir.
  * Erisimi olmayan lig hata verirse sessizce atlanir.
  */
 const DEFAULT_COMPETITION_CODES = [
-  "PL",   // Premier League
-  "PD",   // La Liga
-  "SA",   // Serie A
-  "BL1",  // Bundesliga
-  "FL1",  // Ligue 1
-  "PPL",  // Primeira Liga
-  "DED",  // Eredivisie
-  "ELC",  // Championship
-  "BSA",  // Brasileirao
-  "TSL",  // Super Lig
-  "CL",   // Champions League
-  "EL",   // Europa League
-  "ECL"   // Conference League
+  "PL",
+  "PD",
+  "SA",
+  "BL1",
+  "FL1",
+  "PPL",
+  "DED",
+  "ELC",
+  "BSA",
+  "TSL",
+  "CL",
+  "EL",
+  "ECL"
 ];
 
 const MAJOR_LEAGUE_KEYWORDS = [
@@ -214,13 +213,13 @@ async function fetchJson(url, options = {}, timeoutMs = 15000) {
     const text = await res.text();
 
     if (!res.ok) {
-      throw new Error(`HTTP ${res.status}: ${text.slice(0, 250)}`);
+      throw new Error(`HTTP ${res.status}: ${text.slice(0, 350)}`);
     }
 
     try {
       return JSON.parse(text);
     } catch {
-      throw new Error(`Gecerli JSON donmedi: ${text.slice(0, 250)}`);
+      throw new Error(`Gecerli JSON donmedi: ${text.slice(0, 350)}`);
     }
   } finally {
     clearTimeout(timer);
@@ -301,8 +300,13 @@ function getObjectValueByPaths(obj, paths = []) {
   return null;
 }
 
+/**
+ * RapidAPI tarafinda bazen direkt mac listesi donmez.
+ * Grup objeleri icinde events dizileri olur.
+ * Bu fonksiyon hem direkt hem nested events yapisini acar.
+ */
 function pickRapidApiItems(data) {
-  const candidates = [
+  const directCandidates = [
     data?.matches,
     data?.data,
     data?.response,
@@ -310,6 +314,7 @@ function pickRapidApiItems(data) {
     data?.fixtures,
     data?.results,
     data?.items,
+    data?.events?.matches,
     data?.response?.matches,
     data?.response?.events,
     data?.data?.matches,
@@ -318,23 +323,75 @@ function pickRapidApiItems(data) {
     data?.matchs
   ];
 
-  for (const c of candidates) {
-    if (Array.isArray(c)) return c;
+  for (const c of directCandidates) {
+    if (Array.isArray(c) && c.length) {
+      const looksLikeMatch = c.some(
+        (x) =>
+          x?.homeTeam ||
+          x?.awayTeam ||
+          x?.startTimestamp ||
+          x?.tournament ||
+          x?.status ||
+          x?.teams ||
+          x?.participants
+      );
+
+      if (looksLikeMatch) return c;
+
+      const nestedEvents = [];
+      for (const item of c) {
+        if (Array.isArray(item?.events)) nestedEvents.push(...item.events);
+        if (Array.isArray(item?.matches)) nestedEvents.push(...item.matches);
+      }
+
+      if (nestedEvents.length) return nestedEvents;
+    }
   }
 
   if (data && typeof data === "object") {
+    const nestedEvents = [];
+
     for (const v of Object.values(data)) {
-      if (Array.isArray(v) && v.length && typeof v[0] === "object") {
-        return v;
+      if (!Array.isArray(v)) continue;
+
+      const looksLikeMatch = v.some(
+        (x) =>
+          x?.homeTeam ||
+          x?.awayTeam ||
+          x?.startTimestamp ||
+          x?.tournament ||
+          x?.status ||
+          x?.teams ||
+          x?.participants
+      );
+
+      if (looksLikeMatch) return v;
+
+      for (const item of v) {
+        if (Array.isArray(item?.events)) nestedEvents.push(...item.events);
+        if (Array.isArray(item?.matches)) nestedEvents.push(...item.matches);
       }
     }
+
+    if (nestedEvents.length) return nestedEvents;
   }
 
   return [];
 }
 
+function pickTeamFromArray(arr, idx) {
+  if (!Array.isArray(arr) || !arr[idx]) return "";
+  return cleanText(
+    arr[idx]?.name ||
+      arr[idx]?.team_name ||
+      arr[idx]?.shortName ||
+      arr[idx]?.short_name
+  );
+}
+
 function pickTeamName(raw, side) {
   const s = side.toLowerCase();
+  const index = side === "home" ? 0 : 1;
 
   return cleanText(
     getObjectValueByPaths(raw, [
@@ -355,12 +412,13 @@ function pickTeamName(raw, side) {
       side === "home" ? "home_name_en" : "away_name_en",
       side === "home" ? "team_home.name" : "team_away.name",
       side === "home" ? "homeCompetitor.name" : "awayCompetitor.name"
-    ])
+    ]) || pickTeamFromArray(raw?.teams, index) || pickTeamFromArray(raw?.participants, index)
   );
 }
 
 function pickTeamId(raw, side) {
   const s = side.toLowerCase();
+  const index = side === "home" ? 0 : 1;
 
   return (
     getObjectValueByPaths(raw, [
@@ -372,7 +430,10 @@ function pickTeamId(raw, side) {
       side === "home" ? "homeTeamId" : "awayTeamId",
       side === "home" ? "team_home.id" : "team_away.id",
       side === "home" ? "homeCompetitor.id" : "awayCompetitor.id"
-    ]) || null
+    ]) ||
+    (Array.isArray(raw?.teams) ? raw.teams[index]?.id : null) ||
+    (Array.isArray(raw?.participants) ? raw.participants[index]?.id : null) ||
+    null
   );
 }
 
@@ -382,6 +443,8 @@ function pickLeagueName(raw) {
       "competition.name",
       "league.name",
       "tournament.name",
+      "tournament.uniqueTournament.name",
+      "uniqueTournament.name",
       "league_name",
       "competition_name",
       "league",
@@ -402,6 +465,7 @@ function pickCountryName(raw) {
       "league.country",
       "country_name",
       "category.country_name",
+      "tournament.category.name",
       "category.name",
       "sport_event.sport_event_context.category.name"
     ])
@@ -409,7 +473,7 @@ function pickCountryName(raw) {
 }
 
 function pickUtcDate(raw) {
-  const val = cleanText(
+  const directVal = cleanText(
     getObjectValueByPaths(raw, [
       "utcDate",
       "date",
@@ -428,10 +492,26 @@ function pickUtcDate(raw) {
     ])
   );
 
-  if (!val) return "";
+  if (directVal) {
+    const d = new Date(directVal);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
 
-  const d = new Date(val);
-  if (!Number.isNaN(d.getTime())) return d.toISOString();
+  const timestampVal = getObjectValueByPaths(raw, [
+    "startTimestamp",
+    "start_timestamp",
+    "fixture.timestamp",
+    "sport_event.start_timestamp"
+  ]);
+
+  if (timestampVal != null) {
+    const num = Number(timestampVal);
+    if (!Number.isNaN(num) && num > 0) {
+      const ms = num < 1000000000000 ? num * 1000 : num;
+      const d = new Date(ms);
+      if (!Number.isNaN(d.getTime())) return d.toISOString();
+    }
+  }
 
   return "";
 }
@@ -460,7 +540,8 @@ function normalizeRapidApiMatch(raw) {
       "match_id",
       "fixture.id",
       "event.id",
-      "sport_event.id"
+      "sport_event.id",
+      "customId"
     ]) || null;
 
   const home = pickTeamName(raw, "home");
@@ -472,6 +553,9 @@ function normalizeRapidApiMatch(raw) {
     cleanText(
       getObjectValueByPaths(raw, [
         "status",
+        "status.description",
+        "status.type",
+        "status.name",
         "match_status",
         "event_status",
         "fixture.status.long",
@@ -481,10 +565,11 @@ function normalizeRapidApiMatch(raw) {
     )
   );
 
-  if (!home || !away || !league || !utcDate) return null;
+  if (!home || !away || !utcDate) return null;
   if (home.toLowerCase() === away.toLowerCase()) return null;
 
-  const competitionCode = slugifyCompetitionCode(league, country);
+  const safeLeague = league || "Unknown League";
+  const competitionCode = slugifyCompetitionCode(safeLeague, country);
 
   return {
     id: `ra_${rawId || `${normalizeTextForKey(home)}_${normalizeTextForKey(away)}_${utcDate}`}`,
@@ -495,7 +580,7 @@ function normalizeRapidApiMatch(raw) {
     awayTeam: away,
     homeTeamId: pickTeamId(raw, "home"),
     awayTeamId: pickTeamId(raw, "away"),
-    league,
+    league: safeLeague,
     country,
     competitionCode,
     competitionId:
@@ -503,6 +588,7 @@ function normalizeRapidApiMatch(raw) {
         "competition.id",
         "league.id",
         "tournament.id",
+        "tournament.uniqueTournament.id",
         "season.id"
       ]) || null,
     utcDate,
@@ -514,6 +600,7 @@ function normalizeRapidApiMatch(raw) {
         getObjectValueByPaths(raw, [
           "stage",
           "round",
+          "roundInfo.round",
           "fixture.round",
           "sport_event.sport_event_context.round.name"
         ])
@@ -1092,7 +1179,9 @@ async function enrichMatch(match) {
   const [homeRecent, awayRecent, h2hData] = await Promise.all([
     fetchTeamRecentMatches(match.homeTeamId, dateTo, 10),
     fetchTeamRecentMatches(match.awayTeamId, dateTo, 10),
-    match.rawMatchId ? fetchMatchH2H(match.rawMatchId) : Promise.resolve(null)
+    match.provider === "football-data" && match.rawMatchId
+      ? fetchMatchH2H(match.rawMatchId)
+      : Promise.resolve(null)
   ]);
 
   const homeRecentStats = buildRecentTeamStats(homeRecent, match.homeTeamId);
@@ -1531,10 +1620,6 @@ app.get("/today-matches", async (req, res) => {
     const dateTo = dateFrom;
 
     const fixtureResult = await getMatchesWithCache(dateFrom, dateTo);
-    console.log("fixtureResult:", {
-      provider: fixtureResult.provider,
-      count: fixtureResult.matches.length
-    });
 
     const allToday = fixtureResult.matches;
     const filtered = filterLeagueMode(allToday, league_mode, custom_leagues);
@@ -1610,10 +1695,6 @@ app.post("/analyze", async (req, res) => {
     const dateTo = dateFrom;
 
     const fixtureResult = await getMatchesWithCache(dateFrom, dateTo);
-    console.log("analyze fixtureResult:", {
-      provider: fixtureResult.provider,
-      count: fixtureResult.matches.length
-    });
 
     const allToday = fixtureResult.matches;
     const filtered = filterLeagueMode(allToday, league_mode, custom_leagues);
@@ -1650,7 +1731,17 @@ app.post("/analyze", async (req, res) => {
           enriched: {
             home: { standing: null, standingForm: {}, recent: {} },
             away: { standing: null, standingForm: {}, recent: {} },
-            h2h: { matches: 0, homeWins: 0, draws: 0, awayWins: 0, avgGoals: 0, bttsRate: 0, over25Rate: 0, firstHalf2PlusRate: 0, summary: "Veri alinamadi." }
+            h2h: {
+              matches: 0,
+              homeWins: 0,
+              draws: 0,
+              awayWins: 0,
+              avgGoals: 0,
+              bttsRate: 0,
+              over25Rate: 0,
+              firstHalf2PlusRate: 0,
+              summary: "Veri alinamadi."
+            }
           }
         });
       }
